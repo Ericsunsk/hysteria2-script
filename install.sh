@@ -3,7 +3,7 @@
 # Hysteria 2 官方标准深度调优与一键自动化管理脚本 (hy2)
 # GitHub 官方仓库: https://github.com/apernet/hysteria
 # 本项目地址: https://github.com/Ericsunsk/hysteria2-script
-# 参照官方最新文档配置 (内置 ACME 证书 / Salamander 混淆 / 原生端口跳跃 / 全动态 QUIC)
+# 参照官方最新文档配置 (内置 ACME 证书 / Salamander 混淆 / 原生端口跳跃 / 全动态 QUIC / Cron 自动运维)
 # Supported OS: Debian / Ubuntu / CentOS / AlmaLinux / RockyLinux / Arch
 # ==============================================================================
 
@@ -163,15 +163,15 @@ gen_random_port() {
 
 # 安装基础依赖
 install_dependencies() {
-    log_info "正在检查并安装基础依赖 (curl, openssl, tar, iptables, nftables, python3, jq)..."
+    log_info "正在检查并安装基础依赖 (curl, openssl, tar, iptables, nftables, python3, jq, cron)..."
     if command -v apt-get &>/dev/null; then
-        apt-get update -y && apt-get install -y curl openssl tar ufw iptables nftables python3 jq speedtest-cli
+        apt-get update -y && apt-get install -y curl openssl tar ufw iptables nftables python3 jq cron speedtest-cli
     elif command -v yum &>/dev/null; then
-        yum install -y curl openssl tar firewalld iptables nftables python3 jq speedtest-cli
+        yum install -y curl openssl tar firewalld iptables nftables python3 jq crontabs speedtest-cli
     elif command -v dnf &>/dev/null; then
-        dnf install -y curl openssl tar firewalld iptables nftables python3 jq speedtest-cli
+        dnf install -y curl openssl tar firewalld iptables nftables python3 jq crontabs speedtest-cli
     elif command -v pacman &>/dev/null; then
-        pacman -Sy --noconfirm curl openssl tar iptables nftables python3 jq
+        pacman -Sy --noconfirm curl openssl tar iptables nftables python3 jq cronie
     fi
 }
 
@@ -294,6 +294,28 @@ configure_firewall() {
     fi
 
     log_warn "提示：若使用的是阿里云、腾讯云、AWS、GCP等云服务器，请务必在【云控制台安全组】中额外放行 UDP ${port_spec} 端口范围！"
+}
+
+# 配置 Cron 自动化运维任务
+setup_cron_maintenance() {
+    check_root
+    echo -e "\n${CYAN}Cron 自动化运维与日志清理配置:${NC}"
+    echo -e " 1) 开启每周日凌晨 3 点自动清理日志 + 检查内核升级"
+    echo -e " 2) 关闭并删除定时运维任务"
+    read -rp "请选择操作 [默认: 1]: " cron_choice
+    cron_choice=${cron_choice:-1}
+
+    if [[ "$cron_choice" == "1" ]]; then
+        cat << EOF > /etc/cron.d/hysteria-maintenance
+# Hysteria 2 自动化运维任务 (每周日凌晨 3 点执行日志清理与平滑升级)
+0 3 * * 0 root journalctl --vacuum-time=3d &>/dev/null && /usr/local/bin/hy2 update &>/dev/null
+EOF
+        chmod 644 /etc/cron.d/hysteria-maintenance
+        log_success "已成功配置 Cron 自动化运维定时任务！(/etc/cron.d/hysteria-maintenance)"
+    else
+        rm -f /etc/cron.d/hysteria-maintenance
+        log_success "已关闭并清理定时运维任务。"
+    fi
 }
 
 # 检查更新 Hysteria 2 内核 (兼容 Systemd 与 Docker)
@@ -628,6 +650,13 @@ EOF
     # 防火墙
     configure_firewall "${PORT_SHOW}"
 
+    # 默认开启 Cron 自动运维
+    cat << EOF > /etc/cron.d/hysteria-maintenance
+# Hysteria 2 自动化运维任务 (每周日凌晨 3 点执行日志清理与平滑升级)
+0 3 * * 0 root journalctl --vacuum-time=3d &>/dev/null && /usr/local/bin/hy2 update &>/dev/null
+EOF
+    chmod 644 /etc/cron.d/hysteria-maintenance 2>/dev/null
+
     # 根据 DEPLOY_MODE 进行 Systemd 原生部署或 Docker Compose 容器部署
     if [[ "$DEPLOY_MODE" == "2" ]]; then
         # Docker 部署分支
@@ -735,6 +764,7 @@ EOF
     echo -e "${CYAN}动态带宽限制       :${NC} 上行 ${up_limit} | 下行 ${down_limit}"
     echo -e "${CYAN}流量统计 API       :${NC} http://127.0.0.1:9090/traffic"
     echo -e "${CYAN}内网 ACL 防护      :${NC} 已启用 (自动拒绝内网与私有 IP 扫描)"
+    echo -e "${CYAN}Cron 定时运维      :${NC} 每周日凌晨 3 点自动清理日志与检查升级"
     echo -e "${GREEN}----------------------------------------------------${NC}"
     echo -e "${YELLOW}🔗 V2RayN / Nekobox / Sing-box / Shadowrocket 一键分享链接:${NC}"
     echo -e "${PURPLE}${share_link}${NC}"
@@ -881,6 +911,7 @@ uninstall_hysteria2() {
         log_info "清除配置文件及证书..."
         rm -rf /etc/hysteria
         rm -f /etc/sysctl.d/99-hysteria.conf
+        rm -f /etc/cron.d/hysteria-maintenance
         rm -f /usr/local/bin/hy2
         
         log_info "卸载二进制程序..."
@@ -912,7 +943,7 @@ show_menu() {
     fi
 
     echo -e "${CYAN}================================================================${NC}"
-    echo -e "${CYAN}             Hysteria 2 自动化管理面板 (v2.3)                   ${NC}"
+    echo -e "${CYAN}             Hysteria 2 自动化管理面板 (v2.4)                   ${NC}"
     echo -e "${CYAN}  官方项目: https://github.com/apernet/hysteria                 ${NC}"
     echo -e "${CYAN}  开源脚本: https://github.com/Ericsunsk/hysteria2-script       ${NC}"
     echo -e "${CYAN}================================================================${NC}"
@@ -925,24 +956,26 @@ show_menu() {
     echo -e "  ${GREEN}2.${NC} 测速与网络优化     (Speedtest & Network Tuning)"
     echo -e "  ${GREEN}3.${NC} 流量统计面板       (Traffic Statistics)"
     echo -e "  ${GREEN}4.${NC} 检查与升级内核     (Update Hysteria Core / Docker Image)"
-    echo -e "  ${GREEN}5.${NC} 查看服务日志       (Service Logs)"
-    echo -e "  ${GREEN}6.${NC} 重启服务          (Restart Service)"
-    echo -e "  ${GREEN}7.${NC} 停止服务          (Stop Service)"
-    echo -e "  ${GREEN}8.${NC} 查看节点与配置     (View Config & Links)"
-    echo -e "  ${GREEN}9.${NC} 卸载服务          (Uninstall Service)"
+    echo -e "  ${GREEN}5.${NC} 配置 Cron 定时运维  (Cron Auto Maintenance)"
+    echo -e "  ${GREEN}6.${NC} 查看服务日志       (Service Logs)"
+    echo -e "  ${GREEN}7.${NC} 重启服务          (Restart Service)"
+    echo -e "  ${GREEN}8.${NC} 停止服务          (Stop Service)"
+    echo -e "  ${GREEN}9.${NC} 查看节点与配置     (View Config & Links)"
+    echo -e "  ${GREEN}10.${NC} 卸载服务         (Uninstall Service)"
     echo -e "  ${GREEN}0.${NC} 退出              (Exit Console)"
     echo -e "${CYAN}================================================================${NC}"
-    read -rp "请输入选项 [0-9]: " choice
+    read -rp "请输入选项 [0-10]: " choice
 
     case "$choice" in
         1) install_hysteria2 ;;
         2) tune_existing_config ;;
         3) query_traffic_stats ;;
         4) update_hysteria_binary ;;
-        5) view_logs ;;
-        6) restart_service ;;
-        7) stop_service ;;
-        8)
+        5) setup_cron_maintenance ;;
+        6) view_logs ;;
+        7) restart_service ;;
+        8) stop_service ;;
+        9)
             if [[ -f /etc/hysteria/config.yaml ]]; then
                 local pass port_spec sni obfs_p
                 pass=$(grep 'password:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
@@ -976,7 +1009,7 @@ show_menu() {
                 log_err "未找到配置文件 /etc/hysteria/config.yaml，请先安装！"
             fi
             ;;
-        9) uninstall_hysteria2 ;;
+        10) uninstall_hysteria2 ;;
         0) exit 0 ;;
         *) log_err "无效选项！"; exit 1 ;;
     esac
@@ -991,6 +1024,8 @@ elif [[ "$1" == "tune" ]]; then
     tune_existing_config
 elif [[ "$1" == "stats" || "$1" == "traffic" ]]; then
     query_traffic_stats
+elif [[ "$1" == "cron" ]]; then
+    setup_cron_maintenance
 elif [[ "$1" == "update" ]]; then
     update_hysteria_binary
 elif [[ "$1" == "uninstall" ]]; then

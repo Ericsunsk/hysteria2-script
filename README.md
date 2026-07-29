@@ -36,6 +36,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/m
 - **🎲 随机强安全参数**：监听端口与 16 位认证密码默认随机生成，同时支持一键自定义。
 - **🔄 一键版本升级与维护**：可实时检测并从官方 GitHub Releases 直接升级 Hysteria 2 内核。
 
+- **⏰ Cron 自动化运维与日志定期清理**：默认安装每周日凌晨 3 点自动清理超过 3 天的历史日志，并自动检查升级 Hysteria 2 内核与平滑重载。
+
 ---
 
 ## 📋 快捷指令参考
@@ -46,6 +48,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/m
 | `hy2 install` | 安装 / 重新配置服务 (Install / Reconfigure Service) |
 | `hy2 tune` | 测速与网络优化 (Speedtest & Network Tuning) |
 | `hy2 stats` | 流量统计面板 (Traffic Statistics) |
+| `hy2 cron` | 配置 Cron 定时运维 (Cron Auto Maintenance) |
 | `hy2 update` | 检查与升级内核 (Update Hysteria Core) |
 | `hy2 status` / `hy2 log` | 查看服务日志 (Service Logs) |
 | `hy2 restart` | 重启服务 (Restart Service) |
