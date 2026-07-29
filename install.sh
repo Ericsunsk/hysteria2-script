@@ -853,7 +853,7 @@ EOF
         mport_query="&mport=${PORT_SHOW}"
     fi
 
-    local share_link="hy2://${PASSWORD}@${main_host}:${main_port}?insecure=${insecure_param}&sni=${domain_name}&peer=${domain_name}&alpn=h3${obfs_query}${mport_query}#Hysteria2_${main_host}"
+    local share_link="hysteria2://${PASSWORD}@${main_host}:${main_port}?insecure=${insecure_param}&peer=${domain_name}&sni=${domain_name}&alpn=h3${obfs_query}${mport_query}#Hysteria2_${main_host}"
 
     echo -e "\n${GREEN}====================================================${NC}"
     echo -e "${GREEN}      🎉 Hysteria 2 官方深度调优部署完成！           ${NC}"
@@ -1094,7 +1094,7 @@ show_node_info() {
         mport_q="&mport=${port_spec}"
     fi
 
-    local share_link="hy2://${pass}@${server_ip}:${main_p}?insecure=${insecure_val}&sni=${sni}&peer=${sni}&alpn=h3${obfs_q}${mport_q}#Hysteria2_${server_ip}"
+    local share_link="hysteria2://${pass}@${server_ip}:${main_p}?insecure=${insecure_val}&peer=${sni}&sni=${sni}&alpn=h3${obfs_q}${mport_q}#Hysteria2_${server_ip}"
     
     echo -e "\n${GREEN}================ 当前节点配置信息 ================${NC}"
     echo -e "${CYAN}运行模式       :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd")"
