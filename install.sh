@@ -902,13 +902,19 @@ EOF
     echo -e "${YELLOW}🔗 V2RayN / Nekobox / Sing-box / Shadowrocket 一键分享链接:${NC}"
     echo -e "${PURPLE}${share_link}${NC}"
     echo -e "${GREEN}----------------------------------------------------${NC}"
+    local clash_ports_yaml="    port: ${main_port}"
+    if [[ "$PORT_SHOW" == *-* ]]; then
+        clash_ports_yaml="    port: ${main_port}
+    ports: \"${PORT_SHOW}\""
+    fi
+
     echo -e "${CYAN}📄 Clash Meta / Mihomo 客户端配置参考片段:${NC}"
     cat << EOF
 proxies:
-  - name: Hysteria2-Node
+  - name: ${node_remark}
     type: hysteria2
     server: ${main_host}
-    port: ${PORT_SHOW}
+${clash_ports_yaml}
     password: ${PASSWORD}
 $([ -n "$OBFS_PASS" ] && echo "    obfs: salamander")
 $([ -n "$OBFS_PASS" ] && echo "    obfs-password: ${OBFS_PASS}")
@@ -1128,6 +1134,12 @@ show_node_info() {
     node_remark=$(get_node_remark "${server_ip}")
     local share_link="hysteria2://${pass}@${server_ip}:${main_p}?insecure=${insecure_val}&peer=${sni}&sni=${sni}&alpn=h3${obfs_q}${mport_q}#${node_remark}"
     
+    local clash_p_yaml="    port: ${main_p}"
+    if [[ "$port_spec" == *-* ]]; then
+        clash_p_yaml="    port: ${main_p}
+    ports: \"${port_spec}\""
+    fi
+
     echo -e "\n${GREEN}================ 当前节点配置信息 ================${NC}"
     echo -e "${CYAN}运行模式       :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd")"
     echo -e "${CYAN}服务器 IP      :${NC} ${server_ip}"
@@ -1136,6 +1148,20 @@ show_node_info() {
     echo -e "${CYAN}Salamander 混淆:${NC} $([ -n "$obfs_p" ] && echo "已开启 (密钥: ${obfs_p})" || echo "未启用")"
     echo -e "${CYAN}SNI 域名       :${NC} ${sni}"
     echo -e "${CYAN}节点链接       :${NC} ${share_link}"
+    echo -e "${GREEN}--------------------------------------------------${NC}"
+    echo -e "${CYAN}📄 Clash Meta / Mihomo 客户端配置参考片段:${NC}"
+    cat << EOF
+proxies:
+  - name: ${node_remark}
+    type: hysteria2
+    server: ${server_ip}
+${clash_p_yaml}
+    password: ${pass}
+$([ -n "$obfs_p" ] && echo "    obfs: salamander")
+$([ -n "$obfs_p" ] && echo "    obfs-password: ${obfs_p}")
+    sni: ${sni}
+    skip-cert-verify: $([ "$insecure_val" == "1" ] && echo "true" || echo "false")
+EOF
     echo -e "${GREEN}==================================================${NC}\n"
 }
 
