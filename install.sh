@@ -1126,14 +1126,17 @@ show_menu() {
         echo -e "  监听配置 (Listen)  : ${listen_info}"
         echo -e "  报文混淆 (Obfs)    : ${obfs_info}"
         echo -e "${CYAN}================================================================${NC}"
-        echo -e "  ${GREEN}1.${NC} 安装 / 重新配置服务"
-        echo -e "  ${GREEN}2.${NC} 测速与网络优化"
-        echo -e "  ${GREEN}3.${NC} 检查与升级内核"
-        echo -e "  ${GREEN}4.${NC} 配置 Cron 定时运维"
-        echo -e "  ${GREEN}5.${NC} 查看服务日志"
-        echo -e "  ${GREEN}6.${NC} 重启服务"
-        echo -e "  ${GREEN}7.${NC} 停止服务"
-        echo -e "  ${GREEN}8.${NC} 查看节点与配置"
+        echo -e "${YELLOW}  --- [ 节点与运行控制 ] ---${NC}"
+        echo -e "  ${GREEN}1.${NC} 查看节点与配置"
+        echo -e "  ${GREEN}2.${NC} 查看服务日志"
+        echo -e "  ${GREEN}3.${NC} 重启服务"
+        echo -e "  ${GREEN}4.${NC} 停止服务"
+        echo -e "${YELLOW}  --- [ 配置与网络调优 ] ---${NC}"
+        echo -e "  ${GREEN}5.${NC} 安装 / 重新配置服务"
+        echo -e "  ${GREEN}6.${NC} 测速与网络优化"
+        echo -e "${YELLOW}  --- [ 系统与运维管理 ] ---${NC}"
+        echo -e "  ${GREEN}7.${NC} 检查与升级内核"
+        echo -e "  ${GREEN}8.${NC} 配置 Cron 定时运维"
         echo -e "  ${GREEN}9.${NC} 卸载服务"
         echo -e " ${GREEN}00.${NC} 升级管理脚本"
         echo -e "  ${GREEN}0.${NC} 退出"
@@ -1141,14 +1144,14 @@ show_menu() {
         read -rp "请输入选项 [0-9, 00]: " choice
 
         case "$choice" in
-            1) install_hysteria2 ;;
-            2) tune_existing_config ;;
-            3) update_hysteria_binary ;;
-            4) setup_cron_maintenance ;;
-            5) view_logs ;;
-            6) restart_service ;;
-            7) stop_service ;;
-            8) show_node_info ;;
+            1) show_node_info ;;
+            2) view_logs ;;
+            3) restart_service ;;
+            4) stop_service ;;
+            5) install_hysteria2 ;;
+            6) tune_existing_config ;;
+            7) update_hysteria_binary ;;
+            8) setup_cron_maintenance ;;
             9) uninstall_hysteria2 ;;
             00) update_script ;;
             0) exit 0 ;;
