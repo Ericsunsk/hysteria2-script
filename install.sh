@@ -88,6 +88,11 @@ get_free_port() {
     echo "$port"
 }
 
+# 随机生成一个 10000-60000 范围内的端口
+gen_random_port() {
+    echo $((10000 + RANDOM % 50000))
+}
+
 # 智能检测 VPS 的 IP 协议栈支持情况 (IPv4 / IPv6 双栈)
 detect_ip_stack() {
     if ip -6 addr show 2>/dev/null | grep -q "inet6.*global"; then
