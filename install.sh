@@ -425,6 +425,7 @@ update_script() {
         mv -f "$tmp_script" /usr/local/bin/hy2 2>/dev/null
         chmod +x /usr/local/bin/hy2 2>/dev/null
         log_success "管理脚本已成功升级至 GitHub 最新版本！"
+        exit 0
     else
         rm -f "$tmp_script"
         log_err "升级脚本失败，请检查网络连接。"
