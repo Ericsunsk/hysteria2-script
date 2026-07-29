@@ -145,13 +145,15 @@ get_service_status() {
 get_hysteria_version() {
     if is_docker_mode; then
         if command -v docker &>/dev/null && docker exec hysteria-server hysteria version &>/dev/null; then
-            docker exec hysteria-server hysteria version 2>/dev/null | head -n1 | awk '{print $3}' || echo "Docker 镜像"
+            docker exec hysteria-server hysteria version 2>/dev/null | grep -i '^Version:' | awk '{print $2}' || echo "Docker 镜像"
         else
             echo "Docker 最新版"
         fi
     else
         if command -v hysteria &>/dev/null; then
-            hysteria version 2>/dev/null | head -n1 | awk '{print $3}' || echo "已安装"
+            local ver
+            ver=$(hysteria version 2>/dev/null | grep -i '^Version:' | awk '{print $2}')
+            echo "${ver:-已安装}"
         else
             echo "无"
         fi
