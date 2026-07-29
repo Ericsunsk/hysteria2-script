@@ -170,6 +170,34 @@ get_public_ip() {
     echo "$ip"
 }
 
+# 根据服务器公网 IP 自动获取国家国旗 Icon + 协议名称作为节点默认别名
+get_node_remark() {
+    local ip="${1:-}"
+    if [[ -z "$ip" ]]; then
+        ip=$(get_public_ip)
+    fi
+    local code=""
+    code=$(curl -s4 --connect-timeout 3 "http://ip-api.com/json/${ip}?fields=countryCode" 2>/dev/null | grep -o '"countryCode":"[^"]*"' | cut -d'"' -f4)
+    if [[ -z "$code" ]]; then
+        code=$(curl -s4 --connect-timeout 3 "https://ipinfo.io/${ip}/country" 2>/dev/null | tr -d '\n\r ')
+    fi
+    code=$(echo "$code" | tr '[:lower:]' '[:upper:]')
+    if [[ "$code" =~ ^[A-Z]{2}$ ]]; then
+        local c1="${code:0:1}"
+        local c2="${code:1:1}"
+        local char1 char2 hex1 hex2
+        char1=$(LC_ALL=C printf "%d" "'$c1")
+        char2=$(LC_ALL=C printf "%d" "'$c2")
+        hex1=$(printf "%X" $((char1 + 127397)))
+        hex2=$(printf "%X" $((char2 + 127397)))
+        local flag
+        flag=$(printf "\\U${hex1}\\U${hex2}")
+        echo "${flag} Hysteria 2"
+    else
+        echo "🌐 Hysteria 2"
+    fi
+}
+
 # 随机密码生成器 (16位强密码)
 gen_random_pass() {
     tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 16
@@ -853,7 +881,9 @@ EOF
         mport_query="&mport=${PORT_SHOW}"
     fi
 
-    local share_link="hysteria2://${PASSWORD}@${main_host}:${main_port}?insecure=${insecure_param}&peer=${domain_name}&sni=${domain_name}&alpn=h3${obfs_query}${mport_query}#Hysteria2_${main_host}"
+    local node_remark
+    node_remark=$(get_node_remark "${server_ip}")
+    local share_link="hysteria2://${PASSWORD}@${main_host}:${main_port}?insecure=${insecure_param}&peer=${domain_name}&sni=${domain_name}&alpn=h3${obfs_query}${mport_query}#${node_remark}"
 
     echo -e "\n${GREEN}====================================================${NC}"
     echo -e "${GREEN}      🎉 Hysteria 2 官方深度调优部署完成！           ${NC}"
@@ -1094,7 +1124,9 @@ show_node_info() {
         mport_q="&mport=${port_spec}"
     fi
 
-    local share_link="hysteria2://${pass}@${server_ip}:${main_p}?insecure=${insecure_val}&peer=${sni}&sni=${sni}&alpn=h3${obfs_q}${mport_q}#Hysteria2_${server_ip}"
+    local node_remark
+    node_remark=$(get_node_remark "${server_ip}")
+    local share_link="hysteria2://${pass}@${server_ip}:${main_p}?insecure=${insecure_val}&peer=${sni}&sni=${sni}&alpn=h3${obfs_q}${mport_q}#${node_remark}"
     
     echo -e "\n${GREEN}================ 当前节点配置信息 ================${NC}"
     echo -e "${CYAN}运行模式       :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd")"
