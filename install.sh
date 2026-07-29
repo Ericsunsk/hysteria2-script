@@ -3,7 +3,7 @@
 # Hysteria 2 官方标准深度调优与一键自动化管理脚本 (hy2)
 # GitHub 官方仓库: https://github.com/apernet/hysteria
 # 本项目地址: https://github.com/Ericsunsk/hysteria2-script
-# 参照官方最新文档配置 (内置 ACME 证书 / 原生端口跳跃 / 全动态 QUIC / 流量统计 API)
+# 参照官方最新文档配置 (内置 ACME 证书 / 原生端口跳跃 / 全动态 QUIC / 智能双栈与端口避让)
 # Supported OS: Debian / Ubuntu / CentOS / AlmaLinux / RockyLinux / Arch
 # ==============================================================================
 
@@ -43,6 +43,40 @@ shortcut_register() {
         ln -sf "$script_path" /usr/local/bin/hy2 2>/dev/null
         chmod +x /usr/local/bin/hy2 2>/dev/null
         log_success "已快捷注册系统命令 'hy2'！今后在终端任何位置输入 hy2 即可唤出管理菜单。"
+    fi
+}
+
+# 检查 UDP 端口是否已被系统进程占用
+is_port_occupied() {
+    local port=$1
+    if command -v ss &>/dev/null; then
+        ss -tuln | awk '{print $5}' | grep -E ":${port}$" &>/dev/null
+    elif command -v lsof &>/dev/null; then
+        lsof -iUDP:${port} &>/dev/null
+    else
+        return 1
+    fi
+}
+
+# 智能查找未被占用的可用 UDP 端口 (冲突自动递增避让)
+get_free_port() {
+    local port=$1
+    while is_port_occupied "$port"; do
+        log_warn "检测到 UDP 端口 ${port} 已被系统进程占用，正在智能跳过并切换下一个可用端口..."
+        port=$((port + 1))
+        if [ "$port" -gt 65535 ]; then
+            port=10000
+        fi
+    done
+    echo "$port"
+}
+
+# 智能检测 VPS 的 IP 协议栈支持情况 (IPv4 / IPv6 双栈)
+detect_ip_stack() {
+    if ip -6 addr show 2>/dev/null | grep -q "inet6.*global"; then
+        echo "dual" # 具有公网 IPv6 地址，使用双栈监听 [::]:port
+    else
+        echo "ipv4" # 仅支持 IPv4 或 IPv6 未启用，使用 0.0.0.0:port 避免启动失败
     fi
 }
 
@@ -272,7 +306,7 @@ install_hysteria2() {
     shortcut_register
 
     echo -e "\n${PURPLE}====================================================${NC}"
-    echo -e "${PURPLE}     Hysteria 2 服务端配置与自动化部署              ${NC}"
+    echo -e "${PURPLE}     Hysteria 2 服务端配置与智能双栈部署            ${NC}"
     echo -e "${PURPLE}====================================================${NC}\n"
 
     # 自动优化系统内核网络参数
@@ -300,9 +334,23 @@ install_hysteria2() {
         fi
     fi
 
+    # 智能协议栈识别与端口冲突检测避让
+    local ip_stack
+    ip_stack=$(detect_ip_stack)
+    local listen_prefix=""
+    if [[ "$ip_stack" == "dual" ]]; then
+        listen_prefix=":" # 监听 [::]:port (双栈)
+        log_info "检测到系统支持公网 IPv6，自动开启 IPv4/IPv6 双栈监听支持！"
+    else
+        listen_prefix="0.0.0.0:" # 仅指定 IPv4
+        log_info "检测到系统单栈 IPv4 环境，配置 0.0.0.0 监听。"
+    fi
+
     # 2. 端口模式选择 (单端口 vs 官方原生端口跳跃 Port Hopping)
     local default_p
     default_p=$(gen_random_port)
+    default_p=$(get_free_port "$default_p")
+
     echo -e "\n${CYAN}请选择监听端口模式 (Port Listening Mode):${NC}"
     echo -e " 1) 标准单端口模式 (Single Port: ${default_p})"
     echo -e " 2) 官方原生端口跳跃模式 (Port Hopping: 10000-50000)"
@@ -315,15 +363,17 @@ install_hysteria2() {
 
     if [[ "$PORT_MODE" == "2" ]]; then
         local hop_start=$((10000 + RANDOM % 20000))
+        hop_start=$(get_free_port "$hop_start")
         local hop_end=$((hop_start + 10000))
         read -rp "请输入端口跳跃范围 [默认随机: ${hop_start}-${hop_end}]: " HOP_RANGE
         HOP_RANGE=${HOP_RANGE:-"${hop_start}-${hop_end}"}
-        LISTEN_CONFIG=":${HOP_RANGE}"
+        LISTEN_CONFIG="${listen_prefix}${HOP_RANGE}"
         PORT_SHOW="${HOP_RANGE}"
     else
-        read -rp "请输入 Hysteria 2 监听端口 [默认随机: ${default_p}]: " PORT_INPUT
+        read -rp "请输入 Hysteria 2 监听端口 [默认随机可用端口: ${default_p}]: " PORT_INPUT
         PORT_INPUT=${PORT_INPUT:-$default_p}
-        LISTEN_CONFIG=":${PORT_INPUT}"
+        PORT_INPUT=$(get_free_port "$PORT_INPUT")
+        LISTEN_CONFIG="${listen_prefix}${PORT_INPUT}"
         PORT_SHOW="${PORT_INPUT}"
     fi
 
@@ -497,10 +547,19 @@ EOF
     # 防火墙
     configure_firewall "${PORT_SHOW}"
 
-    # 给 systemd 赋予网络修改权限 (用于内置端口跳跃 iptables/nftables)
+    # 给 systemd 赋予网络修改与资源守护限制 (Cgroups 内存/句柄防护)
     if [[ -f /etc/systemd/system/hysteria-server.service ]]; then
         if ! grep -q "CAP_NET_ADMIN" /etc/systemd/system/hysteria-server.service 2>/dev/null; then
-            sed -i '/\[Service\]/a AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE' /etc/systemd/system/hysteria-server.service 2>/dev/null
+            sed -i '/\[Service\]/a AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\nLimitNOFILE=1048576\nMemoryMax=85%' /etc/systemd/system/hysteria-server.service 2>/dev/null
+        fi
+    fi
+
+    # 验证语法校验
+    if command -v hysteria &>/dev/null; then
+        hysteria check -c /etc/hysteria/config.yaml &>/dev/null
+        if [[ $? -ne 0 ]]; then
+            log_err "Hysteria 配置文件语法校验失败，请检查设置！"
+            exit 1
         fi
     fi
 
@@ -533,7 +592,7 @@ EOF
     echo -e "${GREEN}      🎉 Hysteria 2 官方深度调优部署完成！           ${NC}"
     echo -e "${GREEN}====================================================${NC}"
     echo -e "${CYAN}服务器地址 / IP    :${NC} ${main_host}"
-    echo -e "${CYAN}监听端口 / 范围    :${NC} UDP ${PORT_SHOW}"
+    echo -e "${CYAN}监听端口 / 范围    :${NC} UDP ${PORT_SHOW} ($([ "$ip_stack" == "dual" ] && echo "IPv4/IPv6 双栈" || echo "IPv4 单栈"))"
     echo -e "${CYAN}认证密码           :${NC} ${PASSWORD}"
     echo -e "${CYAN}SNI 域名           :${NC} ${domain_name}"
     echo -e "${CYAN}证书验证 (insecure):${NC} ${insecure_param} ($([ "$insecure_param" == "0" ] && echo "正规 ACME 证书安全连接" || echo "自签证书跳过验证"))"
@@ -558,7 +617,7 @@ EOF
     echo -e "${GREEN}====================================================${NC}\n"
 }
 
-# 独立运行网络优化与配置更新
+# 独立运行网络优化与配置更新 (带平滑热重载)
 tune_existing_config() {
     check_root
     if [[ ! -f /etc/hysteria/config.yaml ]]; then
@@ -593,8 +652,18 @@ tune_existing_config() {
         sed -i "/bandwidth:/,/down:/c\bandwidth:\n  up: ${tuned_u} mbps\n  down: ${tuned_d} mbps" /etc/hysteria/config.yaml
     fi
 
-    systemctl restart hysteria-server.service
-    log_success "网络跑分优化完成！"
+    # 语法检测
+    if command -v hysteria &>/dev/null; then
+        hysteria check -c /etc/hysteria/config.yaml &>/dev/null
+        if [[ $? -ne 0 ]]; then
+            log_err "语法校验错误，取消更新配置。"
+            return 1
+        fi
+    fi
+
+    # 平滑热重载 (优先使用 reload 避免中断在链接)
+    systemctl reload hysteria-server.service 2>/dev/null || systemctl restart hysteria-server.service
+    log_success "网络跑分优化完成！已应用热重载 (Hot Reload)。"
     log_info "已更新动态带宽: 上行 ${tuned_u}Mbps / 下行 ${tuned_d}Mbps"
 }
 
@@ -661,7 +730,7 @@ show_menu() {
     fi
 
     echo -e "${CYAN}================================================================${NC}"
-    echo -e "${CYAN}             Hysteria 2 自动化管理面板 (v2.0)                   ${NC}"
+    echo -e "${CYAN}             Hysteria 2 自动化管理面板 (v2.1)                   ${NC}"
     echo -e "${CYAN}  官方项目: https://github.com/apernet/hysteria                 ${NC}"
     echo -e "${CYAN}  开源脚本: https://github.com/Ericsunsk/hysteria2-script       ${NC}"
     echo -e "${CYAN}================================================================${NC}"
