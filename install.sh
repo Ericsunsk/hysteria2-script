@@ -415,15 +415,15 @@ update_script() {
     local tmp_script="/tmp/hy2_install_tmp.sh"
     curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/main/install.sh -o "$tmp_script"
     if [[ $? -eq 0 && -s "$tmp_script" ]]; then
+        chmod +x "$tmp_script" 2>/dev/null
         local script_path
         script_path=$(readlink -f "$0" 2>/dev/null || echo "$0")
-        if [[ -f "$script_path" ]]; then
+        if [[ -f "$script_path" && "$script_path" != "/usr/local/bin/hy2" ]]; then
             cp -f "$tmp_script" "$script_path" 2>/dev/null
             chmod +x "$script_path" 2>/dev/null
         fi
-        cp -f "$tmp_script" /usr/local/bin/hy2 2>/dev/null
+        mv -f "$tmp_script" /usr/local/bin/hy2 2>/dev/null
         chmod +x /usr/local/bin/hy2 2>/dev/null
-        rm -f "$tmp_script"
         log_success "管理脚本已成功升级至 GitHub 最新版本！"
     else
         rm -f "$tmp_script"
