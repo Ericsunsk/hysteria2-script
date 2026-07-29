@@ -451,13 +451,13 @@ extract_config_listen_port() {
 }
 
 extract_config_auth_password() {
-    # 提取 auth 块下的 password（跳过 salamander 块的 password）
-    awk '/^auth:/{found=1} found && /password:/{print $2; exit}' /etc/hysteria/config.yaml 2>/dev/null
+    # 提取 auth 块下的 password（跳过 salamander 块的 password，剥离双引号）
+    awk '/^auth:/{found=1} found && /password:/{print $2; exit}' /etc/hysteria/config.yaml 2>/dev/null | tr -d '"' | tr -d "'"
 }
 
 extract_config_obfs_password() {
-    # 提取 salamander 块下的 password
-    awk '/salamander:/{found=1} found && /password:/{print $2; exit}' /etc/hysteria/config.yaml 2>/dev/null
+    # 提取 salamander 块下的 password（剥离双引号）
+    awk '/salamander:/{found=1} found && /password:/{print $2; exit}' /etc/hysteria/config.yaml 2>/dev/null | tr -d '"' | tr -d "'"
 }
 
 extract_config_sni() {
