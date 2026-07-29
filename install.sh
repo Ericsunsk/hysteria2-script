@@ -956,15 +956,21 @@ tune_existing_config() {
     log_info "已更新动态带宽: 上行 ${tuned_u}Mbps / 下行 ${tuned_d}Mbps"
 }
 
-# 查看运行日志 (区分 Systemd 与 Docker)
+# 查看运行日志 (捕获 Ctrl+C，防止退出日志时强退脚本)
 view_logs() {
+    # 捕获 SIGINT (Ctrl+C)，防止 Ctrl+C 退出日志时终止整个脚本进程
+    trap 'trap - INT; echo -e "\n${CYAN}[INFO]${NC} 已退出日志实时查看。"' INT
+
     if is_docker_mode; then
-        log_info "正在查看 Hysteria 2 Docker 容器日志 (按 Ctrl+C 退出)..."
-        docker logs -f --tail 50 hysteria-server
+        log_info "正在查看 Hysteria 2 Docker 容器日志 (按 Ctrl+C 退出并返回主菜单)..."
+        docker logs --tail 50 -f hysteria-server 2>/dev/null
     else
-        log_info "正在查看 Hysteria 2 Systemd 实时日志 (按 Ctrl+C 退出)..."
-        journalctl -u hysteria-server.service -n 50 -f
+        log_info "正在查看 Hysteria 2 Systemd 实时日志 (按 Ctrl+C 退出并返回主菜单)..."
+        journalctl -u hysteria-server.service -n 50 -f --no-hostname
     fi
+
+    # 还原 INT 信号处理
+    trap - INT
 }
 
 # 重启服务
