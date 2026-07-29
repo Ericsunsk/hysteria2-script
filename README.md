@@ -22,6 +22,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/m
 
 ## ✨ 核心特性
 
+- **🐳 Systemd 原生与 Docker Compose 双部署模式**：支持自由选择 Systemd 本地原生运行或 Docker Compose 容器隔离部署（`apernet/hysteria:latest` 官方镜像，支持环境隔离与自动重启守护）。
 - **📜 官方内置 ACME 证书申请**：支持自动获取并续签 Let's Encrypt 正规 TLS 证书（客户端实现 `insecure=0` 强安全校验），同时支持无域名时的 100 年自签名证书。
 - **🔀 官方原生端口跳跃 (Port Hopping)**：支持自定义端口范围（如 `:20000-50000`），客户端随机跳跃发包，彻底规避运营商针对 UDP 的 QoS 限制与阻断。
 - **⚡ 端口冲突智能自动避让**：自动检测 UDP 端口占用状态（通过 `ss` / `lsof`），端口被占用时自动找到下一个可用端口。

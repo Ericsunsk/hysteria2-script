@@ -3,7 +3,7 @@
 # Hysteria 2 官方标准深度调优与一键自动化管理脚本 (hy2)
 # GitHub 官方仓库: https://github.com/apernet/hysteria
 # 本项目地址: https://github.com/Ericsunsk/hysteria2-script
-# 参照官方最新文档配置 (内置 ACME 证书 / 原生端口跳跃 / 全动态 QUIC / 智能双栈与端口避让)
+# 参照官方最新文档配置 (支持 Systemd 原生 / Docker Compose 双模式部署 / 内置 ACME / 端口跳跃 / 动态 QUIC)
 # Supported OS: Debian / Ubuntu / CentOS / AlmaLinux / RockyLinux / Arch
 # ==============================================================================
 
@@ -80,23 +80,64 @@ detect_ip_stack() {
     fi
 }
 
-# 获取服务运行状态
-get_service_status() {
-    if ! command -v hysteria &>/dev/null; then
-        echo -e "${YELLOW}未安装 (Not Installed)${NC}"
-    elif systemctl is-active --quiet hysteria-server.service 2>/dev/null; then
-        echo -e "${GREEN}运行中 (Running)${NC}"
+# 检查并安装 Docker 环境
+install_docker_if_needed() {
+    if ! command -v docker &>/dev/null; then
+        log_info "未检测到 Docker 环境，正在从官方安装 Docker Engine..."
+        curl -fsSL https://get.docker.com | bash
+        systemctl enable docker &>/dev/null
+        systemctl start docker &>/dev/null
+    fi
+}
+
+# 检查是否为 Docker 模式部署
+is_docker_mode() {
+    if [[ -f /etc/hysteria/docker-compose.yml ]]; then
+        return 0
     else
-        echo -e "${RED}已停止 (Stopped)${NC}"
+        return 1
+    fi
+}
+
+# 获取服务运行状态 (自动区分 Systemd 与 Docker)
+get_service_status() {
+    if is_docker_mode; then
+        if command -v docker &>/dev/null && docker inspect -f '{{.State.Running}}' hysteria-server &>/dev/null; then
+            local is_running
+            is_running=$(docker inspect -f '{{.State.Running}}' hysteria-server 2>/dev/null)
+            if [[ "$is_running" == "true" ]]; then
+                echo -e "${GREEN}运行中 (Docker 容器)${NC}"
+            else
+                echo -e "${RED}已停止 (Docker 容器)${NC}"
+            fi
+        else
+            echo -e "${RED}已停止 (Docker 容器)${NC}"
+        fi
+    else
+        if ! command -v hysteria &>/dev/null; then
+            echo -e "${YELLOW}未安装 (Not Installed)${NC}"
+        elif systemctl is-active --quiet hysteria-server.service 2>/dev/null; then
+            echo -e "${GREEN}运行中 (Systemd 原生)${NC}"
+        else
+            echo -e "${RED}已停止 (Systemd 原生)${NC}"
+        fi
     fi
 }
 
 # 获取当前已安装的 Hysteria 2 内核版本
 get_hysteria_version() {
-    if command -v hysteria &>/dev/null; then
-        hysteria version 2>/dev/null | head -n1 | awk '{print $3}' || echo "已安装"
+    if is_docker_mode; then
+        if command -v docker &>/dev/null && docker exec hysteria-server hysteria version &>/dev/null; then
+            docker exec hysteria-server hysteria version 2>/dev/null | head -n1 | awk '{print $3}' || echo "Docker 镜像"
+        else
+            echo "Docker 最新版"
+        fi
     else
-        echo "无"
+        if command -v hysteria &>/dev/null; then
+            hysteria version 2>/dev/null | head -n1 | awk '{print $3}' || echo "已安装"
+        else
+            echo "无"
+        fi
     fi
 }
 
@@ -255,16 +296,28 @@ configure_firewall() {
     log_warn "提示：若使用的是阿里云、腾讯云、AWS、GCP等云服务器，请务必在【云控制台安全组】中额外放行 UDP ${port_spec} 端口范围！"
 }
 
-# 检查更新 Hysteria 2 内核
+# 检查更新 Hysteria 2 内核 (兼容 Systemd 与 Docker)
 update_hysteria_binary() {
     check_root
-    log_info "正在从 GitHub 官方 Release (apernet/hysteria) 更新 Hysteria 2 内核..."
-    bash <(curl -fsSL https://get.hy2.sh/)
-    if [[ $? -eq 0 ]]; then
-        log_success "Hysteria 2 内核已更新至最新版本！"
-        systemctl restart hysteria-server.service &>/dev/null
+    if is_docker_mode; then
+        log_info "正在从 GitHub 官方 Docker Registry 拉取最新的 apernet/hysteria 镜像..."
+        if docker compose version &>/dev/null; then
+            docker compose -f /etc/hysteria/docker-compose.yml pull
+            docker compose -f /etc/hysteria/docker-compose.yml up -d
+        else
+            docker-compose -f /etc/hysteria/docker-compose.yml pull
+            docker-compose -f /etc/hysteria/docker-compose.yml up -d
+        fi
+        log_success "Docker 版 Hysteria 2 镜像已成功升级至最新版本！"
     else
-        log_err "更新失败，请检查网络连接。"
+        log_info "正在从 GitHub 官方 Release (apernet/hysteria) 更新 Hysteria 2 内核..."
+        bash <(curl -fsSL https://get.hy2.sh/)
+        if [[ $? -eq 0 ]]; then
+            log_success "Hysteria 2 内核已更新至最新版本！"
+            systemctl restart hysteria-server.service &>/dev/null
+        else
+            log_err "更新失败，请检查网络连接。"
+        fi
     fi
 }
 
@@ -306,14 +359,21 @@ install_hysteria2() {
     shortcut_register
 
     echo -e "\n${PURPLE}====================================================${NC}"
-    echo -e "${PURPLE}     Hysteria 2 服务端配置与智能双栈部署            ${NC}"
+    echo -e "${PURPLE}     Hysteria 2 服务端配置与智能部署                ${NC}"
     echo -e "${PURPLE}====================================================${NC}\n"
 
     # 自动优化系统内核网络参数
     optimize_kernel_network
 
+    # 0. 部署模式选择 (Systemd 原生 vs Docker Compose 容器)
+    echo -e "${CYAN}请选择安装与运行模式 (Deployment Mode):${NC}"
+    echo -e " 1) Systemd 本地原生部署 (性能极佳，适合大部分 VPS)"
+    echo -e " 2) Docker Compose 容器化部署 (环境彻底隔离，全自动守护更新)"
+    read -rp "请选择部署模式 [默认: 1]: " DEPLOY_MODE
+    DEPLOY_MODE=${DEPLOY_MODE:-1}
+
     # 1. 证书模式选择 (自签证书 vs 内置 ACME 官方申请)
-    echo -e "${CYAN}请选择 TLS 证书模式 (TLS Certificate Mode):${NC}"
+    echo -e "\n${CYAN}请选择 TLS 证书模式 (TLS Certificate Mode):${NC}"
     echo -e " 1) 自签名证书模式 (Self-Signed Cert, 免域名)"
     echo -e " 2) ACME 自动申请模式 (Let's Encrypt, 需真实域名)"
     read -rp "请选择证书模式 [默认: 1]: " CERT_MODE
@@ -422,13 +482,6 @@ install_hysteria2() {
     init_cn=$(echo "$quic_wins" | cut -d: -f3)
     local max_cn
     max_cn=$(echo "$quic_wins" | cut -d: -f4)
-
-    log_info "开始从 GitHub 官方拉取安装 Hysteria 2 内核..."
-    bash <(curl -fsSL https://get.hy2.sh/)
-    if [[ $? -ne 0 ]]; then
-        log_err "Hysteria 2 官方脚本安装失败，请检查网络或 URL 连通性。"
-        exit 1
-    fi
 
     # 准备目录
     mkdir -p /etc/hysteria
@@ -547,34 +600,82 @@ EOF
     # 防火墙
     configure_firewall "${PORT_SHOW}"
 
-    # 给 systemd 赋予网络修改与资源守护限制 (Cgroups 内存/句柄防护)
-    if [[ -f /etc/systemd/system/hysteria-server.service ]]; then
-        if ! grep -q "CAP_NET_ADMIN" /etc/systemd/system/hysteria-server.service 2>/dev/null; then
-            sed -i '/\[Service\]/a AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\nLimitNOFILE=1048576\nMemoryMax=85%' /etc/systemd/system/hysteria-server.service 2>/dev/null
-        fi
-    fi
+    # 根据 DEPLOY_MODE 进行 Systemd 原生部署或 Docker Compose 容器部署
+    if [[ "$DEPLOY_MODE" == "2" ]]; then
+        # Docker 部署分支
+        install_docker_if_needed
+        log_info "生成 Docker Compose 配置文件 /etc/hysteria/docker-compose.yml..."
+        cat << EOF > /etc/hysteria/docker-compose.yml
+version: '3.8'
+services:
+  hysteria:
+    image: apernet/hysteria:latest
+    container_name: hysteria-server
+    restart: always
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - /etc/hysteria:/etc/hysteria
+    command: ["server", "-c", "/etc/hysteria/config.yaml"]
+EOF
 
-    # 验证语法校验
-    if command -v hysteria &>/dev/null; then
-        hysteria check -c /etc/hysteria/config.yaml &>/dev/null
-        if [[ $? -ne 0 ]]; then
-            log_err "Hysteria 配置文件语法校验失败，请检查设置！"
+        # 清除旧的原生 systemd 服务以防冲突
+        systemctl stop hysteria-server.service &>/dev/null
+        systemctl disable hysteria-server.service &>/dev/null
+
+        log_info "正在启动 Docker 容器版 Hysteria 2..."
+        if docker compose version &>/dev/null; then
+            docker compose -f /etc/hysteria/docker-compose.yml up -d
+        else
+            docker-compose -f /etc/hysteria/docker-compose.yml up -d
+        fi
+
+        sleep 2
+        if command -v docker &>/dev/null && docker inspect -f '{{.State.Running}}' hysteria-server 2>/dev/null | grep -q "true"; then
+            log_success "Docker 版 Hysteria 2 容器已成功运行！"
+        else
+            log_err "Docker 容器启动失败，请检查日志！"
             exit 1
         fi
-    fi
-
-    log_info "配置开机自启并启动服务..."
-    systemctl daemon-reload
-    systemctl enable hysteria-server.service
-    systemctl restart hysteria-server.service
-
-    # 检查状态
-    sleep 2
-    if systemctl is-active --quiet hysteria-server.service; then
-        log_success "Hysteria 2 高性能深度调优服务已成功运行！"
     else
-        log_err "Hysteria 2 服务启动失败，请执行 'systemctl status hysteria-server.service' 或检查日志！"
-        exit 1
+        # Systemd 原生部署分支
+        rm -f /etc/hysteria/docker-compose.yml &>/dev/null
+        log_info "开始从 GitHub 官方拉取安装 Hysteria 2 内核..."
+        bash <(curl -fsSL https://get.hy2.sh/)
+        if [[ $? -ne 0 ]]; then
+            log_err "Hysteria 2 官方脚本安装失败，请检查网络连通性。"
+            exit 1
+        fi
+
+        # 给 systemd 赋予网络修改与资源守护限制 (Cgroups 内存/句柄防护)
+        if [[ -f /etc/systemd/system/hysteria-server.service ]]; then
+            if ! grep -q "CAP_NET_ADMIN" /etc/systemd/system/hysteria-server.service 2>/dev/null; then
+                sed -i '/\[Service\]/a AmbientCapabilities=CAP_NET_ADMIN CAP_NET_BIND_SERVICE\nLimitNOFILE=1048576\nMemoryMax=85%' /etc/systemd/system/hysteria-server.service 2>/dev/null
+            fi
+        fi
+
+        # 验证语法校验
+        if command -v hysteria &>/dev/null; then
+            hysteria check -c /etc/hysteria/config.yaml &>/dev/null
+            if [[ $? -ne 0 ]]; then
+                log_err "Hysteria 配置文件语法校验失败，请检查设置！"
+                exit 1
+            fi
+        fi
+
+        log_info "配置开机自启并启动服务..."
+        systemctl daemon-reload
+        systemctl enable hysteria-server.service
+        systemctl restart hysteria-server.service
+
+        sleep 2
+        if systemctl is-active --quiet hysteria-server.service; then
+            log_success "Systemd 原生 Hysteria 2 服务已成功运行！"
+        else
+            log_err "Hysteria 2 服务启动失败，请检查日志！"
+            exit 1
+        fi
     fi
 
     # 生成节点链接与客户端配置
@@ -591,6 +692,7 @@ EOF
     echo -e "\n${GREEN}====================================================${NC}"
     echo -e "${GREEN}      🎉 Hysteria 2 官方深度调优部署完成！           ${NC}"
     echo -e "${GREEN}====================================================${NC}"
+    echo -e "${CYAN}运行模式           :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd 原生")"
     echo -e "${CYAN}服务器地址 / IP    :${NC} ${main_host}"
     echo -e "${CYAN}监听端口 / 范围    :${NC} UDP ${PORT_SHOW} ($([ "$ip_stack" == "dual" ] && echo "IPv4/IPv6 双栈" || echo "IPv4 单栈"))"
     echo -e "${CYAN}认证密码           :${NC} ${PASSWORD}"
@@ -652,7 +754,7 @@ tune_existing_config() {
         sed -i "/bandwidth:/,/down:/c\bandwidth:\n  up: ${tuned_u} mbps\n  down: ${tuned_d} mbps" /etc/hysteria/config.yaml
     fi
 
-    # 语法检测
+    # 语法检测 (如果安装了二进制)
     if command -v hysteria &>/dev/null; then
         hysteria check -c /etc/hysteria/config.yaml &>/dev/null
         if [[ $? -ne 0 ]]; then
@@ -662,41 +764,81 @@ tune_existing_config() {
     fi
 
     # 平滑热重载 (优先使用 reload 避免中断在链接)
-    systemctl reload hysteria-server.service 2>/dev/null || systemctl restart hysteria-server.service
-    log_success "网络跑分优化完成！已应用热重载 (Hot Reload)。"
+    if is_docker_mode; then
+        if docker compose version &>/dev/null; then
+            docker compose -f /etc/hysteria/docker-compose.yml restart
+        else
+            docker-compose -f /etc/hysteria/docker-compose.yml restart
+        fi
+    else
+        systemctl reload hysteria-server.service 2>/dev/null || systemctl restart hysteria-server.service
+    fi
+    log_success "网络跑分优化完成！已应用配置更新。"
     log_info "已更新动态带宽: 上行 ${tuned_u}Mbps / 下行 ${tuned_d}Mbps"
 }
 
-# 查看运行日志
+# 查看运行日志 (区分 Systemd 与 Docker)
 view_logs() {
-    log_info "正在查看 Hysteria 2 实时日志 (按 Ctrl+C 退出)..."
-    journalctl -u hysteria-server.service -n 50 -f
+    if is_docker_mode; then
+        log_info "正在查看 Hysteria 2 Docker 容器日志 (按 Ctrl+C 退出)..."
+        docker logs -f --tail 50 hysteria-server
+    else
+        log_info "正在查看 Hysteria 2 Systemd 实时日志 (按 Ctrl+C 退出)..."
+        journalctl -u hysteria-server.service -n 50 -f
+    fi
 }
 
 # 重启服务
 restart_service() {
     log_info "正在重启 Hysteria 2 服务..."
-    systemctl restart hysteria-server.service
-    if systemctl is-active --quiet hysteria-server.service; then
-        log_success "Hysteria 2 服务已重启成功！"
+    if is_docker_mode; then
+        if docker compose version &>/dev/null; then
+            docker compose -f /etc/hysteria/docker-compose.yml restart
+        else
+            docker-compose -f /etc/hysteria/docker-compose.yml restart
+        fi
+        log_success "Hysteria 2 Docker 容器已重启成功！"
     else
-        log_err "服务重启后未成功运行，请检查日志。"
+        systemctl restart hysteria-server.service
+        if systemctl is-active --quiet hysteria-server.service; then
+            log_success "Hysteria 2 Systemd 服务已重启成功！"
+        else
+            log_err "服务重启后未成功运行，请检查日志。"
+        fi
     fi
 }
 
 # 停止服务
 stop_service() {
     log_info "正在停止 Hysteria 2 服务..."
-    systemctl stop hysteria-server.service
-    log_success "Hysteria 2 服务已停止。"
+    if is_docker_mode; then
+        if docker compose version &>/dev/null; then
+            docker compose -f /etc/hysteria/docker-compose.yml stop
+        else
+            docker-compose -f /etc/hysteria/docker-compose.yml stop
+        fi
+        log_success "Hysteria 2 Docker 容器已停止。"
+    else
+        systemctl stop hysteria-server.service
+        log_success "Hysteria 2 Systemd 服务已停止。"
+    fi
 }
 
 # 卸载 Hysteria 2
 uninstall_hysteria2() {
     check_root
-    read -rp "确定要卸载 Hysteria 2 并清除相关配置文件吗？(y/N): " confirm
+    read -rp "确定要卸载 Hysteria 2 并清除相关配置文件与容器吗？(y/N): " confirm
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        log_info "正在停止并禁用服务..."
+        log_info "正在停止并清理服务..."
+        if is_docker_mode; then
+            if docker compose version &>/dev/null; then
+                docker compose -f /etc/hysteria/docker-compose.yml down &>/dev/null
+            else
+                docker-compose -f /etc/hysteria/docker-compose.yml down &>/dev/null
+            fi
+            docker rm -f hysteria-server &>/dev/null
+        fi
+
         systemctl stop hysteria-server.service &>/dev/null
         systemctl disable hysteria-server.service &>/dev/null
         
@@ -730,7 +872,7 @@ show_menu() {
     fi
 
     echo -e "${CYAN}================================================================${NC}"
-    echo -e "${CYAN}             Hysteria 2 自动化管理面板 (v2.1)                   ${NC}"
+    echo -e "${CYAN}             Hysteria 2 自动化管理面板 (v2.2)                   ${NC}"
     echo -e "${CYAN}  官方项目: https://github.com/apernet/hysteria                 ${NC}"
     echo -e "${CYAN}  开源脚本: https://github.com/Ericsunsk/hysteria2-script       ${NC}"
     echo -e "${CYAN}================================================================${NC}"
@@ -738,10 +880,10 @@ show_menu() {
     echo -e "  内核版本 (Version) : ${GREEN}${current_ver}${NC}"
     echo -e "  监听配置 (Listen)  : ${PURPLE}${listen_info}${NC}"
     echo -e "${CYAN}================================================================${NC}"
-    echo -e "  ${GREEN}1.${NC} 安装 / 重新配置服务 (Install / Reconfigure)"
+    echo -e "  ${GREEN}1.${NC} 安装 / 重新配置服务 (Systemd 原生 / Docker Compose)"
     echo -e "  ${GREEN}2.${NC} 测速与网络优化     (Speedtest & Network Tuning)"
     echo -e "  ${GREEN}3.${NC} 流量统计面板       (Traffic Statistics)"
-    echo -e "  ${GREEN}4.${NC} 检查与升级内核     (Update Hysteria Core)"
+    echo -e "  ${GREEN}4.${NC} 检查与升级内核     (Update Hysteria Core / Docker Image)"
     echo -e "  ${GREEN}5.${NC} 查看服务日志       (Service Logs)"
     echo -e "  ${GREEN}6.${NC} 重启服务          (Restart Service)"
     echo -e "  ${GREEN}7.${NC} 停止服务          (Stop Service)"
@@ -775,6 +917,7 @@ show_menu() {
                 local share_link="hy2://${pass}@${server_ip}:${port_spec}?insecure=${insecure_val}&sni=${sni}#Hysteria2_${server_ip}"
                 
                 echo -e "\n${GREEN}================ 当前节点配置信息 ================${NC}"
+                echo -e "${CYAN}运行模式       :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd 原生")"
                 echo -e "${CYAN}服务器 IP      :${NC} ${server_ip}"
                 echo -e "${CYAN}监听端口 / 范围:${NC} UDP ${port_spec}"
                 echo -e "${CYAN}认证密码       :${NC} ${pass}"
