@@ -1142,28 +1142,41 @@ show_menu() {
 # 入口
 shortcut_register
 
-if [[ "$1" == "install" ]]; then
-    install_hysteria2
-elif [[ "$1" == "tune" ]]; then
-    tune_existing_config
-elif [[ "$1" == "stats" || "$1" == "traffic" ]]; then
-    query_traffic_stats
-elif [[ "$1" == "cron" ]]; then
-    setup_cron_maintenance
-elif [[ "$1" == "update" ]]; then
-    update_hysteria_binary
-elif [[ "$1" == "00" || "$1" == "update-script" || "$1" == "upgrade" || "$1" == "self-update" ]]; then
-    update_script
-elif [[ "$1" == "uninstall" ]]; then
-    uninstall_hysteria2
-elif [[ "$1" == "restart" ]]; then
-    restart_service
-elif [[ "$1" == "stop" ]]; then
-    stop_service
-elif [[ "$1" == "status" || "$1" == "log" || "$1" == "logs" ]]; then
-    view_logs
-elif [[ "$1" == "info" || "$1" == "node" ]]; then
-    show_node_info
-else
-    show_menu
-fi
+case "$1" in
+    install)
+        install_hysteria2
+        ;;
+    tune)
+        tune_existing_config
+        ;;
+    stats|traffic)
+        query_traffic_stats
+        ;;
+    cron)
+        setup_cron_maintenance
+        ;;
+    update)
+        update_hysteria_binary
+        ;;
+    00|update-script|upgrade|self-update)
+        update_script
+        ;;
+    uninstall)
+        uninstall_hysteria2
+        ;;
+    restart)
+        restart_service
+        ;;
+    stop)
+        stop_service
+        ;;
+    status|log|logs)
+        view_logs
+        ;;
+    info|node)
+        show_node_info
+        ;;
+    *)
+        show_menu
+        ;;
+esac
