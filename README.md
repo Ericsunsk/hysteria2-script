@@ -13,7 +13,7 @@
 在你的 Linux VPS 服务器终端中运行以下一键指令：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/username/repo/main/install.sh -o install.sh && chmod +x install.sh && sudo ./install.sh
+curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/main/install.sh -o install.sh && chmod +x install.sh && sudo ./install.sh
 ```
 
 > **提示**：首次运行后，脚本会自动注册系统快捷命令 `hy2`。以后在 VPS 终端任何目录下，直接输入 **`hy2`** 即可快捷呼出控制台！
