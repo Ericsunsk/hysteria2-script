@@ -448,7 +448,7 @@ update_script() {
     check_root
     log_info "正在从 GitHub 官方仓库 (Ericsunsk/hysteria2-script) 拉取最新管理脚本..."
     local tmp_script="/tmp/hy2_install_tmp.sh"
-    curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/main/install.sh -o "$tmp_script"
+    curl -fsSL -H 'Cache-Control: no-cache, no-store' "https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/main/install.sh?v=$(date +%s)" -o "$tmp_script"
     if [[ $? -eq 0 && -s "$tmp_script" ]]; then
         chmod +x "$tmp_script" 2>/dev/null
         local script_path
