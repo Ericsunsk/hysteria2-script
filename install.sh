@@ -123,20 +123,20 @@ get_service_status() {
             local is_running
             is_running=$(docker inspect -f '{{.State.Running}}' hysteria-server 2>/dev/null)
             if [[ "$is_running" == "true" ]]; then
-                echo -e "${GREEN}运行中 (Docker 容器)${NC}"
+                echo -e "${GREEN}🐳 运行中 (Docker 容器)${NC}"
             else
-                echo -e "${RED}已停止 (Docker 容器)${NC}"
+                echo -e "${RED}🔴 已停止 (Docker 容器)${NC}"
             fi
         else
-            echo -e "${RED}已停止 (Docker 容器)${NC}"
+            echo -e "${RED}🔴 已停止 (Docker 容器)${NC}"
         fi
     else
         if ! command -v hysteria &>/dev/null; then
-            echo -e "${YELLOW}未安装 (Not Installed)${NC}"
+            echo -e "${YELLOW}⚪ 未安装 (Not Installed)${NC}"
         elif systemctl is-active --quiet hysteria-server.service 2>/dev/null; then
-            echo -e "${GREEN}运行中 (Systemd)${NC}"
+            echo -e "${GREEN}🟢 运行中 (Systemd)${NC}"
         else
-            echo -e "${RED}已停止 (Systemd)${NC}"
+            echo -e "${RED}🔴 已停止 (Systemd)${NC}"
         fi
     fi
 }
@@ -1019,13 +1019,20 @@ show_menu() {
         local current_ver
         current_ver=$(get_hysteria_version)
 
-        local listen_info="无"
-        local obfs_info="未启用"
+        local listen_info="${NC}⚪ 未配置"
+        local obfs_info="${NC}⚪ 未启用"
         if [[ -f /etc/hysteria/config.yaml ]]; then
-            listen_info=$(grep 'listen:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
+            local raw_listen
+            raw_listen=$(grep 'listen:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
+            listen_info="${PURPLE}🌐 UDP ${raw_listen}${NC}"
             if grep -q "salamander" /etc/hysteria/config.yaml 2>/dev/null; then
-                obfs_info="Salamander 混淆"
+                obfs_info="${YELLOW}🔒 Salamander 混淆${NC}"
             fi
+        fi
+
+        local ver_show="${GREEN}⚡ ${current_ver}${NC}"
+        if [[ "$current_ver" == "无" ]]; then
+            ver_show="${NC}⚪ 无"
         fi
 
         echo -e "${CYAN}================================================================${NC}"
@@ -1034,9 +1041,9 @@ show_menu() {
         echo -e "${CYAN}  开源脚本: https://github.com/Ericsunsk/hysteria2-script       ${NC}"
         echo -e "${CYAN}================================================================${NC}"
         echo -e "  服务状态 (Status)  : ${service_stat}"
-        echo -e "  内核版本 (Version) : ${GREEN}${current_ver}${NC}"
-        echo -e "  监听配置 (Listen)  : ${PURPLE}${listen_info}${NC}"
-        echo -e "  报文混淆 (Obfs)    : ${YELLOW}${obfs_info}${NC}"
+        echo -e "  内核版本 (Version) : ${ver_show}"
+        echo -e "  监听配置 (Listen)  : ${listen_info}"
+        echo -e "  报文混淆 (Obfs)    : ${obfs_info}"
         echo -e "${CYAN}================================================================${NC}"
         echo -e "  ${GREEN}1.${NC} 安装 / 重新配置服务"
         echo -e "  ${GREEN}2.${NC} 测速与网络优化"
