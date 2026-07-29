@@ -30,7 +30,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/m
 - **⚡ 端口冲突智能自动避让**：自动检测 UDP 端口占用状态（通过 `ss` / `lsof`），端口被占用时自动找到下一个可用端口。
 - **🌐 IPv4 / IPv6 双栈自适应识别**：自动检测 VPS 网络协议栈，支持时自动应用 `:port` 双栈监听，无 IPv6 时自动降级为 `0.0.0.0:port`。
 - **🔥 平滑热重载 (Hot Reload) 与语法校验**：配置文件修改后先自动执行 `hysteria check` 校验语法，成功后通过热重载更新参数，连接不中断。
-- **📊 流量统计看板 (Traffic Stats API)**：内置 127.0.0.1 流量统计接口，可在控制台中实时查看各节点的累计上行/下行消耗流量（自动格式化为 KB/MB/GB）。
 - **📈 VPS 实际带宽跑分与动态 QUIC 窗口**：基于 VPS 实际测速结果与物理内存容量，全动态计算最佳 `BDP` 带宽上限与 QUIC 单流/连接接收窗口参数，防止爆内存与发包抖动。
 - **🚀 Linux 系统内核底层加速 & Cgroups 保护**：一键开启 `TCP BBR` + `FQ` 队列，系统 UDP 缓冲区扩充至 **32MB**，并配置句柄数与最大内存保护。
 - **🛡️ 局域网 ACL 安全防护**：默认拦截 `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16` 等私有 IP 地址，防止节点被用于局域网扫描与滥用。
@@ -47,7 +46,6 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/m
 | `hy2` | 呼出控制台面板 (Management Console) |
 | `hy2 install` | 安装 / 重新配置服务 (Install / Reconfigure Service) |
 | `hy2 tune` | 测速与网络优化 (Speedtest & Network Tuning) |
-| `hy2 stats` | 流量统计面板 (Traffic Statistics) |
 | `hy2 cron` | 配置 Cron 定时运维 (Cron Auto Maintenance) |
 | `hy2 update` | 检查与升级内核 (Update Hysteria Core) |
 | `hy2 upgrade` | 升级管理脚本自身 (Update hy2 Script) |

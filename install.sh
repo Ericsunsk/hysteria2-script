@@ -184,20 +184,6 @@ gen_random_port() {
     fi
 }
 
-# 字节数转人类可读格式 (KB/MB/GB)
-format_bytes() {
-    local bytes=$1
-    if [ "$bytes" -ge 1073741824 ]; then
-        echo "$(awk "BEGIN {printf \"%.2f\", ${bytes}/1073741824}") GB"
-    elif [ "$bytes" -ge 1048576 ]; then
-        echo "$(awk "BEGIN {printf \"%.2f\", ${bytes}/1048576}") MB"
-    elif [ "$bytes" -ge 1024 ]; then
-        echo "$(awk "BEGIN {printf \"%.2f\", ${bytes}/1024}") KB"
-    else
-        echo "${bytes} Bytes"
-    fi
-}
-
 # 安装基础依赖
 install_dependencies() {
     log_info "正在检查并安装基础依赖 (curl, openssl, tar, iptables, nftables, python3, jq, cron)..."
@@ -404,41 +390,6 @@ update_script() {
     fi
 }
 
-# 查询流量统计数据 (使用官方 Traffic Stats API，人类可读格式)
-query_traffic_stats() {
-    if [[ ! -f /etc/hysteria/config.yaml ]]; then
-        log_err "未找到配置文件 /etc/hysteria/config.yaml！"
-        return
-    fi
-
-    local stats_secret
-    stats_secret=$(grep 'secret:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}' | tr -d '"' | tr -d "'")
-    if [[ -z "$stats_secret" ]]; then
-        log_err "未启用 Traffic Stats API！"
-        return
-    fi
-
-    log_info "正在查询 Hysteria 2 服务端流量消耗数据..."
-    local stats_json
-    stats_json=$(curl -s -H "Authorization: ${stats_secret}" http://127.0.0.1:9090/traffic 2>/dev/null)
-
-    if [[ -n "$stats_json" && "$stats_json" != "{}" ]] && echo "$stats_json" | jq -e . &>/dev/null; then
-        echo -e "\n${GREEN}================ 📊 流量统计看板 (Traffic Statistics) ================${NC}"
-        echo "$stats_json" | jq -r 'to_entries[] | "\(.key) \(.value.tx) \(.value.rx)"' | while read -r user tx rx; do
-            local tx_h rx_h
-            tx_h=$(format_bytes "$tx")
-            rx_h=$(format_bytes "$rx")
-            echo -e "  客户端标识: ${CYAN}${user}${NC}"
-            echo -e "    ⬆️ 发送流量 (Tx): ${GREEN}${tx_h}${NC}"
-            echo -e "    ⬇️ 接收流量 (Rx): ${GREEN}${rx_h}${NC}"
-            echo ""
-        done
-        echo -e "${GREEN}========================================================================${NC}\n"
-    else
-        log_warn "暂无活动流量数据，或服务未成功启动。API Endpoint: http://127.0.0.1:9090/traffic"
-    fi
-}
-
 # 从已有 config.yaml 中安全提取字段值
 # 用法: extract_yaml_field "auth" "password"  -> 提取 auth 下的 password
 extract_config_listen_port() {
@@ -564,14 +515,11 @@ install_hysteria2() {
         PORT_SHOW="${PORT_INPUT}"
     fi
 
-    # 4. 认证密码与 Traffic Stats Secret
+    # 4. 认证密码
     local default_pass
     default_pass=$(gen_random_pass)
     read -rp "请输入认证密码 [默认随机: ${default_pass}]: " PASSWORD
     PASSWORD=${PASSWORD:-$default_pass}
-
-    local stats_secret
-    stats_secret=$(gen_random_pass)
 
     # 5. 伪装网址
     read -rp "请输入 HTTP 伪装网址 [默认: https://bing.com]: " MASQ_URL
@@ -663,10 +611,6 @@ quic:
 sniff:
   enable: true
 
-trafficStats:
-  listen: 127.0.0.1:9090
-  secret: "${stats_secret}"
-
 acl:
   inline:
     - reject(10.0.0.0/8)
@@ -723,10 +667,6 @@ quic:
 
 sniff:
   enable: true
-
-trafficStats:
-  listen: 127.0.0.1:9090
-  secret: "${stats_secret}"
 
 acl:
   inline:
@@ -852,7 +792,6 @@ EOF
     echo -e "${CYAN}SNI 域名           :${NC} ${domain_name}"
     echo -e "${CYAN}证书验证 (insecure):${NC} ${insecure_param} ($([ "$insecure_param" == "0" ] && echo "正规 ACME 证书安全连接" || echo "自签证书跳过验证"))"
     echo -e "${CYAN}动态带宽限制       :${NC} 上行 ${up_limit} | 下行 ${down_limit}"
-    echo -e "${CYAN}流量统计 API       :${NC} http://127.0.0.1:9090/traffic"
     echo -e "${CYAN}内网 ACL 防护      :${NC} 已启用 (自动拒绝内网与私有 IP 扫描)"
     echo -e "${CYAN}Cron 定时运维      :${NC} 每周日凌晨 3 点自动清理日志与检查升级"
     echo -e "${GREEN}----------------------------------------------------${NC}"
@@ -1101,30 +1040,28 @@ show_menu() {
         echo -e "${CYAN}================================================================${NC}"
         echo -e "  ${GREEN}1.${NC} 安装 / 重新配置服务"
         echo -e "  ${GREEN}2.${NC} 测速与网络优化"
-        echo -e "  ${GREEN}3.${NC} 流量统计面板"
-        echo -e "  ${GREEN}4.${NC} 检查与升级内核"
-        echo -e "  ${GREEN}5.${NC} 配置 Cron 定时运维"
-        echo -e "  ${GREEN}6.${NC} 查看服务日志"
-        echo -e "  ${GREEN}7.${NC} 重启服务"
-        echo -e "  ${GREEN}8.${NC} 停止服务"
-        echo -e "  ${GREEN}9.${NC} 查看节点与配置"
-        echo -e " ${GREEN}10.${NC} 卸载服务"
+        echo -e "  ${GREEN}3.${NC} 检查与升级内核"
+        echo -e "  ${GREEN}4.${NC} 配置 Cron 定时运维"
+        echo -e "  ${GREEN}5.${NC} 查看服务日志"
+        echo -e "  ${GREEN}6.${NC} 重启服务"
+        echo -e "  ${GREEN}7.${NC} 停止服务"
+        echo -e "  ${GREEN}8.${NC} 查看节点与配置"
+        echo -e "  ${GREEN}9.${NC} 卸载服务"
         echo -e " ${GREEN}00.${NC} 升级管理脚本"
         echo -e "  ${GREEN}0.${NC} 退出"
         echo -e "${CYAN}================================================================${NC}"
-        read -rp "请输入选项 [0-10, 00]: " choice
+        read -rp "请输入选项 [0-9, 00]: " choice
 
         case "$choice" in
             1) install_hysteria2 ;;
             2) tune_existing_config ;;
-            3) query_traffic_stats ;;
-            4) update_hysteria_binary ;;
-            5) setup_cron_maintenance ;;
-            6) view_logs ;;
-            7) restart_service ;;
-            8) stop_service ;;
-            9) show_node_info ;;
-            10) uninstall_hysteria2 ;;
+            3) update_hysteria_binary ;;
+            4) setup_cron_maintenance ;;
+            5) view_logs ;;
+            6) restart_service ;;
+            7) stop_service ;;
+            8) show_node_info ;;
+            9) uninstall_hysteria2 ;;
             00) update_script ;;
             0) exit 0 ;;
             *) log_err "无效选项，请重新输入！" ;;
@@ -1144,9 +1081,6 @@ case "$1" in
         ;;
     tune)
         tune_existing_config
-        ;;
-    stats|traffic)
-        query_traffic_stats
         ;;
     cron)
         setup_cron_maintenance
