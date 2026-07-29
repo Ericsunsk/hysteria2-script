@@ -412,7 +412,7 @@ query_traffic_stats() {
     fi
 
     local stats_secret
-    stats_secret=$(grep 'secret:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
+    stats_secret=$(grep 'secret:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}' | tr -d '"' | tr -d "'")
     if [[ -z "$stats_secret" ]]; then
         log_err "未启用 Traffic Stats API！"
         return
@@ -422,21 +422,17 @@ query_traffic_stats() {
     local stats_json
     stats_json=$(curl -s -H "Authorization: ${stats_secret}" http://127.0.0.1:9090/traffic 2>/dev/null)
 
-    if [[ -n "$stats_json" && "$stats_json" != "{}" ]]; then
+    if [[ -n "$stats_json" && "$stats_json" != "{}" ]] && echo "$stats_json" | jq -e . &>/dev/null; then
         echo -e "\n${GREEN}================ 📊 流量统计看板 (Traffic Statistics) ================${NC}"
-        if command -v jq &>/dev/null; then
-            echo "$stats_json" | jq -r 'to_entries[] | "\(.key) \(.value.tx) \(.value.rx)"' | while read -r user tx rx; do
-                local tx_h rx_h
-                tx_h=$(format_bytes "$tx")
-                rx_h=$(format_bytes "$rx")
-                echo -e "  客户端标识: ${CYAN}${user}${NC}"
-                echo -e "    ⬆️ 发送流量 (Tx): ${GREEN}${tx_h}${NC}"
-                echo -e "    ⬇️ 接收流量 (Rx): ${GREEN}${rx_h}${NC}"
-                echo ""
-            done
-        else
-            echo "$stats_json"
-        fi
+        echo "$stats_json" | jq -r 'to_entries[] | "\(.key) \(.value.tx) \(.value.rx)"' | while read -r user tx rx; do
+            local tx_h rx_h
+            tx_h=$(format_bytes "$tx")
+            rx_h=$(format_bytes "$rx")
+            echo -e "  客户端标识: ${CYAN}${user}${NC}"
+            echo -e "    ⬆️ 发送流量 (Tx): ${GREEN}${tx_h}${NC}"
+            echo -e "    ⬇️ 接收流量 (Rx): ${GREEN}${rx_h}${NC}"
+            echo ""
+        done
         echo -e "${GREEN}========================================================================${NC}\n"
     else
         log_warn "暂无活动流量数据，或服务未成功启动。API Endpoint: http://127.0.0.1:9090/traffic"
