@@ -370,6 +370,29 @@ update_hysteria_binary() {
     fi
 }
 
+# 升级管理脚本自身 (Update hy2 script from GitHub)
+update_script() {
+    check_root
+    log_info "正在从 GitHub 官方仓库 (Ericsunsk/hysteria2-script) 拉取最新管理脚本..."
+    local tmp_script="/tmp/hy2_install_tmp.sh"
+    curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/main/install.sh -o "$tmp_script"
+    if [[ $? -eq 0 && -s "$tmp_script" ]]; then
+        local script_path
+        script_path=$(readlink -f "$0" 2>/dev/null || echo "$0")
+        if [[ -f "$script_path" ]]; then
+            cp -f "$tmp_script" "$script_path" 2>/dev/null
+            chmod +x "$script_path" 2>/dev/null
+        fi
+        cp -f "$tmp_script" /usr/local/bin/hy2 2>/dev/null
+        chmod +x /usr/local/bin/hy2 2>/dev/null
+        rm -f "$tmp_script"
+        log_success "管理脚本已成功升级至 GitHub 最新版本！"
+    else
+        rm -f "$tmp_script"
+        log_err "升级脚本失败，请检查网络连接。"
+    fi
+}
+
 # 查询流量统计数据 (使用官方 Traffic Stats API，人类可读格式)
 query_traffic_stats() {
     if [[ ! -f /etc/hysteria/config.yaml ]]; then
@@ -1072,9 +1095,10 @@ show_menu() {
         echo -e "  ${GREEN}8.${NC} 停止服务          (Stop Service)"
         echo -e "  ${GREEN}9.${NC} 查看节点与配置     (View Config & Links)"
         echo -e "  ${GREEN}10.${NC} 卸载服务         (Uninstall Service)"
+        echo -e "  ${GREEN}00.${NC} 升级管理脚本     (Update hy2 Script)"
         echo -e "  ${GREEN}0.${NC} 退出              (Exit Console)"
         echo -e "${CYAN}================================================================${NC}"
-        read -rp "请输入选项 [0-10]: " choice
+        read -rp "请输入选项 [0-10, 00]: " choice
 
         case "$choice" in
             1) install_hysteria2 ;;
@@ -1087,6 +1111,7 @@ show_menu() {
             8) stop_service ;;
             9) show_node_info ;;
             10) uninstall_hysteria2 ;;
+            00) update_script ;;
             0) exit 0 ;;
             *) log_err "无效选项，请重新输入！" ;;
         esac
@@ -1109,6 +1134,8 @@ elif [[ "$1" == "cron" ]]; then
     setup_cron_maintenance
 elif [[ "$1" == "update" ]]; then
     update_hysteria_binary
+elif [[ "$1" == "00" || "$1" == "update-script" || "$1" == "upgrade" || "$1" == "self-update" ]]; then
+    update_script
 elif [[ "$1" == "uninstall" ]]; then
     uninstall_hysteria2
 elif [[ "$1" == "restart" ]]; then
