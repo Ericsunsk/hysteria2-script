@@ -846,7 +846,12 @@ EOF
         obfs_query="&obfs=salamander&obfs-password=${OBFS_PASS}"
     fi
 
-    local share_link="hy2://${PASSWORD}@${main_host}:${PORT_SHOW}?insecure=${insecure_param}&sni=${domain_name}${obfs_query}#Hysteria2_${main_host}"
+    local mport_query=""
+    if [[ "$PORT_SHOW" == *-* ]]; then
+        mport_query="&mport=${PORT_SHOW}"
+    fi
+
+    local share_link="hy2://${PASSWORD}@${main_host}:${PORT_SHOW}?insecure=${insecure_param}&sni=${domain_name}${obfs_query}${mport_query}#Hysteria2_${main_host}"
 
     echo -e "\n${GREEN}====================================================${NC}"
     echo -e "${GREEN}      🎉 Hysteria 2 官方深度调优部署完成！           ${NC}"
@@ -1080,7 +1085,12 @@ show_node_info() {
         obfs_q="&obfs=salamander&obfs-password=${obfs_p}"
     fi
 
-    local share_link="hy2://${pass}@${server_ip}:${port_spec}?insecure=${insecure_val}&sni=${sni}${obfs_q}#Hysteria2_${server_ip}"
+    local mport_q=""
+    if [[ "$port_spec" == *-* ]]; then
+        mport_q="&mport=${port_spec}"
+    fi
+
+    local share_link="hy2://${pass}@${server_ip}:${port_spec}?insecure=${insecure_val}&sni=${sni}${obfs_q}${mport_q}#Hysteria2_${server_ip}"
     
     echo -e "\n${GREEN}================ 当前节点配置信息 ================${NC}"
     echo -e "${CYAN}运行模式       :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd")"
