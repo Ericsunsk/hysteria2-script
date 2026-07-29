@@ -50,7 +50,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/m
 | `hy2 stats` | 流量统计面板 (Traffic Statistics) |
 | `hy2 cron` | 配置 Cron 定时运维 (Cron Auto Maintenance) |
 | `hy2 update` | 检查与升级内核 (Update Hysteria Core) |
-| `hy2 00` / `hy2 upgrade` | 升级管理脚本自身 (Update hy2 Script) |
+| `hy2 upgrade` | 升级管理脚本自身 (Update hy2 Script) |
 | `hy2 status` / `hy2 log` | 查看服务日志 (Service Logs) |
 | `hy2 restart` | 重启服务 (Restart Service) |
 | `hy2 stop` | 停止服务 (Stop Service) |
