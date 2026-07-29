@@ -3,7 +3,7 @@
 # Hysteria 2 官方标准深度调优与一键自动化管理脚本 (hy2)
 # GitHub 官方仓库: https://github.com/apernet/hysteria
 # 本项目地址: https://github.com/Ericsunsk/hysteria2-script
-# 参照官方最新文档配置 (支持 Systemd 原生 / Docker Compose 双模式部署 / 内置 ACME / 端口跳跃 / 动态 QUIC)
+# 参照官方最新文档配置 (内置 ACME 证书 / Salamander 混淆 / 原生端口跳跃 / 全动态 QUIC)
 # Supported OS: Debian / Ubuntu / CentOS / AlmaLinux / RockyLinux / Arch
 # ==============================================================================
 
@@ -394,6 +394,17 @@ install_hysteria2() {
         fi
     fi
 
+    # 2. Salamander 混淆加密配置 (官方混淆抗 DPI)
+    read -rp "是否开启 Hysteria 2 官方 Salamander QUIC 报文混淆加密？(y/N) [默认: n]: " ENABLE_OBFS
+    ENABLE_OBFS=${ENABLE_OBFS:-"n"}
+    local OBFS_PASS=""
+    if [[ "$ENABLE_OBFS" =~ ^[Yy]$ ]]; then
+        local default_obfs_pass
+        default_obfs_pass=$(gen_random_pass)
+        read -rp "请输入 Salamander 混淆密钥 [默认随机: ${default_obfs_pass}]: " OBFS_PASS
+        OBFS_PASS=${OBFS_PASS:-$default_obfs_pass}
+    fi
+
     # 智能协议栈识别与端口冲突检测避让
     local ip_stack
     ip_stack=$(detect_ip_stack)
@@ -406,7 +417,7 @@ install_hysteria2() {
         log_info "检测到系统单栈 IPv4 环境，配置 0.0.0.0 监听。"
     fi
 
-    # 2. 端口模式选择 (单端口 vs 官方原生端口跳跃 Port Hopping)
+    # 3. 端口模式选择 (单端口 vs 官方原生端口跳跃 Port Hopping)
     local default_p
     default_p=$(gen_random_port)
     default_p=$(get_free_port "$default_p")
@@ -437,7 +448,7 @@ install_hysteria2() {
         PORT_SHOW="${PORT_INPUT}"
     fi
 
-    # 3. 认证密码与 Traffic Stats Secret
+    # 4. 认证密码与 Traffic Stats Secret
     local default_pass
     default_pass=$(gen_random_pass)
     read -rp "请输入认证密码 [默认随机: ${default_pass}]: " PASSWORD
@@ -446,11 +457,11 @@ install_hysteria2() {
     local stats_secret
     stats_secret=$(gen_random_pass)
 
-    # 4. 伪装网址
+    # 5. 伪装网址
     read -rp "请输入 HTTP 伪装网址 [默认: https://bing.com]: " MASQ_URL
     MASQ_URL=${MASQ_URL:-"https://bing.com"}
 
-    # 5. 网络实测
+    # 6. 网络实测
     read -rp "是否开启网络实测 + QUIC 动态接收窗口优化？(Y/n) [默认: Y]: " ENABLE_TUNE
     ENABLE_TUNE=${ENABLE_TUNE:-"Y"}
 
@@ -486,6 +497,15 @@ install_hysteria2() {
     # 准备目录
     mkdir -p /etc/hysteria
 
+    # 混淆配置 YAML 构造
+    local obfs_yaml=""
+    if [[ -n "$OBFS_PASS" ]]; then
+        obfs_yaml="obfs:
+  type: salamander
+  salamander:
+    password: ${OBFS_PASS}"
+    fi
+
     # 编写 config.yaml
     log_info "正在生成官方标准 Hysteria 2 配置文件 /etc/hysteria/config.yaml..."
 
@@ -503,6 +523,8 @@ auth:
   type: password
   password: ${PASSWORD}
 
+${obfs_yaml}
+
 masquerade:
   type: proxy
   proxy:
@@ -512,6 +534,8 @@ masquerade:
 bandwidth:
   up: ${up_limit}
   down: ${down_limit}
+
+ignoreClientBandwidth: true
 
 quic:
   initStreamReceiveWindow: ${init_str}
@@ -562,6 +586,8 @@ auth:
   type: password
   password: ${PASSWORD}
 
+${obfs_yaml}
+
 masquerade:
   type: proxy
   proxy:
@@ -571,6 +597,8 @@ masquerade:
 bandwidth:
   up: ${up_limit}
   down: ${down_limit}
+
+ignoreClientBandwidth: true
 
 quic:
   initStreamReceiveWindow: ${init_str}
@@ -687,7 +715,12 @@ EOF
     local main_host="${server_ip}"
     if [[ "$CERT_MODE" == "2" ]]; then main_host="${domain_name}"; fi
 
-    local share_link="hy2://${PASSWORD}@${main_host}:${PORT_SHOW}?insecure=${insecure_param}&sni=${domain_name}#Hysteria2_${main_host}"
+    local obfs_query=""
+    if [[ -n "$OBFS_PASS" ]]; then
+        obfs_query="&obfs=salamander&obfs-password=${OBFS_PASS}"
+    fi
+
+    local share_link="hy2://${PASSWORD}@${main_host}:${PORT_SHOW}?insecure=${insecure_param}&sni=${domain_name}${obfs_query}#Hysteria2_${main_host}"
 
     echo -e "\n${GREEN}====================================================${NC}"
     echo -e "${GREEN}      🎉 Hysteria 2 官方深度调优部署完成！           ${NC}"
@@ -696,6 +729,7 @@ EOF
     echo -e "${CYAN}服务器地址 / IP    :${NC} ${main_host}"
     echo -e "${CYAN}监听端口 / 范围    :${NC} UDP ${PORT_SHOW} ($([ "$ip_stack" == "dual" ] && echo "IPv4/IPv6 双栈" || echo "IPv4 单栈"))"
     echo -e "${CYAN}认证密码           :${NC} ${PASSWORD}"
+    echo -e "${CYAN}Salamander 混淆    :${NC} $([ -n "$OBFS_PASS" ] && echo "已开启 (密钥: ${OBFS_PASS})" || echo "未启用")"
     echo -e "${CYAN}SNI 域名           :${NC} ${domain_name}"
     echo -e "${CYAN}证书验证 (insecure):${NC} ${insecure_param} ($([ "$insecure_param" == "0" ] && echo "正规 ACME 证书安全连接" || echo "自签证书跳过验证"))"
     echo -e "${CYAN}动态带宽限制       :${NC} 上行 ${up_limit} | 下行 ${down_limit}"
@@ -713,6 +747,8 @@ proxies:
     server: ${main_host}
     port: ${PORT_SHOW}
     password: ${PASSWORD}
+$([ -n "$OBFS_PASS" ] && echo "    obfs: salamander")
+$([ -n "$OBFS_PASS" ] && echo "    obfs-password: ${OBFS_PASS}")
     sni: ${domain_name}
     skip-cert-verify: $([ "$insecure_param" == "1" ] && echo "true" || echo "false")
 EOF
@@ -867,18 +903,23 @@ show_menu() {
     current_ver=$(get_hysteria_version)
 
     local listen_info="无"
+    local obfs_info="未启用"
     if [[ -f /etc/hysteria/config.yaml ]]; then
         listen_info=$(grep 'listen:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
+        if grep -q "salamander" /etc/hysteria/config.yaml 2>/dev/null; then
+            obfs_info="Salamander 混淆"
+        fi
     fi
 
     echo -e "${CYAN}================================================================${NC}"
-    echo -e "${CYAN}             Hysteria 2 自动化管理面板 (v2.2)                   ${NC}"
+    echo -e "${CYAN}             Hysteria 2 自动化管理面板 (v2.3)                   ${NC}"
     echo -e "${CYAN}  官方项目: https://github.com/apernet/hysteria                 ${NC}"
     echo -e "${CYAN}  开源脚本: https://github.com/Ericsunsk/hysteria2-script       ${NC}"
     echo -e "${CYAN}================================================================${NC}"
     echo -e "  服务状态 (Status)  : ${service_stat}"
     echo -e "  内核版本 (Version) : ${GREEN}${current_ver}${NC}"
     echo -e "  监听配置 (Listen)  : ${PURPLE}${listen_info}${NC}"
+    echo -e "  报文混淆 (Obfs)    : ${YELLOW}${obfs_info}${NC}"
     echo -e "${CYAN}================================================================${NC}"
     echo -e "  ${GREEN}1.${NC} 安装 / 重新配置服务 (Systemd 原生 / Docker Compose)"
     echo -e "  ${GREEN}2.${NC} 测速与网络优化     (Speedtest & Network Tuning)"
@@ -903,10 +944,11 @@ show_menu() {
         7) stop_service ;;
         8)
             if [[ -f /etc/hysteria/config.yaml ]]; then
-                local pass port_spec sni
+                local pass port_spec sni obfs_p
                 pass=$(grep 'password:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
                 port_spec=$(grep 'listen:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}' | tr -d ':')
                 sni=$(grep -m1 'domains:' -A1 /etc/hysteria/config.yaml 2>/dev/null | tail -n1 | awk '{print $2}' || grep -m1 'CN=' /etc/hysteria/server.crt 2>/dev/null | sed 's/.*CN=//' || echo "bing.com")
+                obfs_p=$(grep -A2 'salamander:' /etc/hysteria/config.yaml 2>/dev/null | grep 'password:' | awk '{print $2}')
                 local server_ip
                 server_ip=$(get_public_ip)
                 local is_acme=0
@@ -914,13 +956,19 @@ show_menu() {
                 local insecure_val="1"
                 if [ "$is_acme" -eq 1 ]; then insecure_val="0"; fi
 
-                local share_link="hy2://${pass}@${server_ip}:${port_spec}?insecure=${insecure_val}&sni=${sni}#Hysteria2_${server_ip}"
+                local obfs_q=""
+                if [[ -n "$obfs_p" ]]; then
+                    obfs_q="&obfs=salamander&obfs-password=${obfs_p}"
+                fi
+
+                local share_link="hy2://${pass}@${server_ip}:${port_spec}?insecure=${insecure_val}&sni=${sni}${obfs_q}#Hysteria2_${server_ip}"
                 
                 echo -e "\n${GREEN}================ 当前节点配置信息 ================${NC}"
                 echo -e "${CYAN}运行模式       :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd 原生")"
                 echo -e "${CYAN}服务器 IP      :${NC} ${server_ip}"
                 echo -e "${CYAN}监听端口 / 范围:${NC} UDP ${port_spec}"
                 echo -e "${CYAN}认证密码       :${NC} ${pass}"
+                echo -e "${CYAN}Salamander 混淆:${NC} $([ -n "$obfs_p" ] && echo "已开启 (密钥: ${obfs_p})" || echo "未启用")"
                 echo -e "${CYAN}SNI 域名       :${NC} ${sni}"
                 echo -e "${CYAN}节点链接       :${NC} ${share_link}"
                 echo -e "${GREEN}==================================================${NC}\n"
