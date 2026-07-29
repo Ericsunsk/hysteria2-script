@@ -807,10 +807,9 @@ EOF
             fi
         fi
 
-        # 验证语法校验
-        if command -v hysteria &>/dev/null; then
-            hysteria check -c /etc/hysteria/config.yaml &>/dev/null
-            if [[ $? -ne 0 ]]; then
+        # 验证语法校验 (兼容不同版本 CLI)
+        if command -v hysteria &>/dev/null && hysteria check --help &>/dev/null; then
+            if ! hysteria check -c /etc/hysteria/config.yaml &>/dev/null; then
                 log_err "Hysteria 配置文件语法校验失败，请检查设置！"
                 exit 1
             fi
@@ -891,42 +890,50 @@ tune_existing_config() {
     optimize_kernel_network
     local tune_result
     tune_result=$(run_network_speedtest)
-    local tuned_u
+
+    # 校验返回值格式是否为 数字:数字:数字
+    if ! echo "$tune_result" | grep -qE '^[0-9]+:[0-9]+:[0-9]+$'; then
+        log_err "测速数据解析异常 (tune_result=${tune_result})，已中止操作。"
+        return 1
+    fi
+
+    local tuned_u tuned_d raw_d
     tuned_u=$(echo "$tune_result" | cut -d: -f1)
-    local tuned_d
     tuned_d=$(echo "$tune_result" | cut -d: -f2)
-    local raw_d
     raw_d=$(echo "$tune_result" | cut -d: -f3)
 
     local quic_wins
     quic_wins=$(calculate_dynamic_quic_windows "$raw_d")
-    local init_str
+    local init_str max_str init_cn max_cn
     init_str=$(echo "$quic_wins" | cut -d: -f1)
-    local max_str
     max_str=$(echo "$quic_wins" | cut -d: -f2)
-    local init_cn
     init_cn=$(echo "$quic_wins" | cut -d: -f3)
-    local max_cn
     max_cn=$(echo "$quic_wins" | cut -d: -f4)
 
     log_info "正在根据实测结果重新计算并更新 /etc/hysteria/config.yaml..."
+    log_info "动态带宽: 上行 ${tuned_u} Mbps / 下行 ${tuned_d} Mbps"
+    log_info "QUIC 窗口: initStream=${init_str} maxStream=${max_str} initConn=${init_cn} maxConn=${max_cn}"
 
     # 备份原始配置
     cp /etc/hysteria/config.yaml /etc/hysteria/config.yaml.bak
 
-    # 更新 bandwidth 部分
-    sed -i "s/^  up: .*/  up: ${tuned_u} mbps/" /etc/hysteria/config.yaml
-    sed -i "s/^  down: .*/  down: ${tuned_d} mbps/" /etc/hysteria/config.yaml
+    # 更新 bandwidth 部分 (兼容带引号与不带引号格式)
+    sed -i 's/^  up: .*/  up: '"${tuned_u}"' mbps/' /etc/hysteria/config.yaml
+    sed -i 's/^  down: .*/  down: '"${tuned_d}"' mbps/' /etc/hysteria/config.yaml
 
     # 更新 QUIC 窗口参数
-    sed -i "s/^  initStreamReceiveWindow: .*/  initStreamReceiveWindow: ${init_str}/" /etc/hysteria/config.yaml
-    sed -i "s/^  maxStreamReceiveWindow: .*/  maxStreamReceiveWindow: ${max_str}/" /etc/hysteria/config.yaml
-    sed -i "s/^  initConnReceiveWindow: .*/  initConnReceiveWindow: ${init_cn}/" /etc/hysteria/config.yaml
-    sed -i "s/^  maxConnReceiveWindow: .*/  maxConnReceiveWindow: ${max_cn}/" /etc/hysteria/config.yaml
+    sed -i 's/^  initStreamReceiveWindow: .*/  initStreamReceiveWindow: '"${init_str}"'/' /etc/hysteria/config.yaml
+    sed -i 's/^  maxStreamReceiveWindow: .*/  maxStreamReceiveWindow: '"${max_str}"'/' /etc/hysteria/config.yaml
+    sed -i 's/^  initConnReceiveWindow: .*/  initConnReceiveWindow: '"${init_cn}"'/' /etc/hysteria/config.yaml
+    sed -i 's/^  maxConnReceiveWindow: .*/  maxConnReceiveWindow: '"${max_cn}"'/' /etc/hysteria/config.yaml
 
-    # 语法检测 (如果安装了二进制)
+    # 语法检测 (兼容不同版本的 hysteria CLI)
     if command -v hysteria &>/dev/null; then
-        if ! hysteria check -c /etc/hysteria/config.yaml &>/dev/null; then
+        local check_ok=true
+        if hysteria check --help &>/dev/null; then
+            hysteria check -c /etc/hysteria/config.yaml &>/dev/null || check_ok=false
+        fi
+        if [[ "$check_ok" == "false" ]]; then
             log_err "语法校验错误，正在回滚配置..."
             mv /etc/hysteria/config.yaml.bak /etc/hysteria/config.yaml
             return 1
