@@ -35,16 +35,16 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/m
 
 ## 📋 快捷指令参考
 
-| 快捷命令 | 功能说明 |
+| 快捷命令 | 功能说明 (Standard Command) |
 | :--- | :--- |
-| `hy2` | 唤出脚本主控制台菜单 |
-| `hy2 install` | 直接执行全自动安装与网络跑分调优 |
-| `hy2 tune` | 重新测速并重新优化 QUIC 窗口与带宽 |
-| `hy2 stats` | 查看服务器各节点实时上传/下载消耗流量 |
-| `hy2 update` | 检查并更新 Hysteria 2 内核到官方最新版 |
-| `hy2 status` / `hy2 log` | 查看服务运行状态与实时日志 |
-| `hy2 restart` | 重启 Hysteria 2 服务 |
-| `hy2 uninstall` | 彻底卸载 Hysteria 2 服务与配置文件 |
+| `hy2` | 呼出控制台面板 (Management Console) |
+| `hy2 install` | 安装 / 重新配置服务 (Install / Reconfigure Service) |
+| `hy2 tune` | 测速与网络优化 (Speedtest & Network Tuning) |
+| `hy2 stats` | 流量统计面板 (Traffic Statistics) |
+| `hy2 update` | 检查与升级内核 (Update Hysteria Core) |
+| `hy2 status` / `hy2 log` | 查看服务日志 (Service Logs) |
+| `hy2 restart` | 重启服务 (Restart Service) |
+| `hy2 uninstall` | 卸载服务 (Uninstall Service) |
 
 ---
 

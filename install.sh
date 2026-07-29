@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Hysteria 2 官方深度调优与一键自动化管理脚本
+# Hysteria 2 官方标准深度调优与一键自动化管理脚本 (hy2)
 # GitHub 官方仓库: https://github.com/apernet/hysteria
 # 本项目地址: https://github.com/Ericsunsk/hysteria2-script
 # 参照官方最新文档配置 (内置 ACME 证书 / 原生端口跳跃 / 全动态 QUIC / 流量统计 API)
@@ -46,16 +46,27 @@ shortcut_register() {
     fi
 }
 
-# 获取当前已安装的 Hysteria 2 版本
+# 获取服务运行状态
+get_service_status() {
+    if ! command -v hysteria &>/dev/null; then
+        echo -e "${YELLOW}未安装 (Not Installed)${NC}"
+    elif systemctl is-active --quiet hysteria-server.service 2>/dev/null; then
+        echo -e "${GREEN}运行中 (Running)${NC}"
+    else
+        echo -e "${RED}已停止 (Stopped)${NC}"
+    fi
+}
+
+# 获取当前已安装的 Hysteria 2 内核版本
 get_hysteria_version() {
     if command -v hysteria &>/dev/null; then
         hysteria version 2>/dev/null | head -n1 | awk '{print $3}' || echo "已安装"
     else
-        echo "未安装"
+        echo "无"
     fi
 }
 
-# 获取公网 IP
+# 获取当前公网 IP
 get_public_ip() {
     local ip=""
     ip=$(curl -s4 --connect-timeout 5 https://api.ipify.org || curl -s4 --connect-timeout 5 https://ifconfig.me/ip || curl -s4 --connect-timeout 5 https://icanhazip.com)
@@ -73,22 +84,6 @@ gen_random_pass() {
 # 随机端口生成器 (10000 - 60000)
 gen_random_port() {
     echo $((10000 + RANDOM % 40000))
-}
-
-# 人性化字节数格式化
-format_bytes() {
-    local bytes=$1
-    if [ -z "$bytes" ] || [ "$bytes" -eq 0 ] 2>/dev/null; then
-        echo "0 B"
-    elif [ "$bytes" -lt 1024 ]; then
-        echo "${bytes} B"
-    elif [ "$bytes" -lt 1048576 ]; then
-        echo "$((bytes / 1024)) KB"
-    elif [ "$bytes" -lt 1073741824 ]; then
-        echo "$((bytes / 1048576)) MB"
-    else
-        echo "$((bytes / 1073741824)) GB"
-    fi
 }
 
 # 安装基础依赖
@@ -213,7 +208,7 @@ configure_firewall() {
     fi
 
     # Firewalld
-    if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewall; then
+    if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
         if [[ "$port_spec" == *-* ]]; then
             firewall-cmd --permanent --add-port="${port_spec//-/:}/udp" &>/dev/null
         else
@@ -258,15 +253,15 @@ query_traffic_stats() {
     stats_json=$(curl -s -H "Authorization: ${stats_secret}" http://127.0.0.1:9090/traffic 2>/dev/null)
 
     if [[ -n "$stats_json" ]]; then
-        echo -e "\n${GREEN}================ 📊 实时流量统计看板 ================${NC}"
+        echo -e "\n${GREEN}================ 📊 流量统计看板 (Traffic Statistics) ================${NC}"
         if command -v jq &>/dev/null; then
-            echo "$stats_json" | jq -r 'to_entries[] | "客户端密码/标识: " + .key + "\n  ⬆️ 上行流量: " + (.value.tx | tostring) + " Bytes\n  ⬇️ 下行流量: " + (.value.rx | tostring) + " Bytes\n"'
+            echo "$stats_json" | jq -r 'to_entries[] | "客户端标识/密码: " + .key + "\n  ⬆️ 发送流量 (Tx): " + (.value.tx | tostring) + " Bytes\n  ⬇️ 接收流量 (Rx): " + (.value.rx | tostring) + " Bytes\n"'
         else
             echo "$stats_json"
         fi
-        echo -e "${GREEN}====================================================${NC}\n"
+        echo -e "${GREEN}========================================================================${NC}\n"
     else
-        log_warn "暂无活动流量数据，或服务未成功启动。API URL: http://127.0.0.1:9090/traffic"
+        log_warn "暂无活动流量数据，或服务未成功启动。API Endpoint: http://127.0.0.1:9090/traffic"
     fi
 }
 
@@ -277,17 +272,16 @@ install_hysteria2() {
     shortcut_register
 
     echo -e "\n${PURPLE}====================================================${NC}"
-    echo -e "${PURPLE}     Hysteria 2 官方深度调优与全动态部署           ${NC}"
-    echo -e "${PURPLE}     GitHub 仓库: https://github.com/Ericsunsk/hysteria2-script${NC}"
+    echo -e "${PURPLE}     Hysteria 2 服务端配置与自动化部署              ${NC}"
     echo -e "${PURPLE}====================================================${NC}\n"
 
     # 自动优化系统内核网络参数
     optimize_kernel_network
 
     # 1. 证书模式选择 (自签证书 vs 内置 ACME 官方申请)
-    echo -e "${CYAN}请选择 TLS 证书模式:${NC}"
-    echo -e " 1) 自动生成自签名证书 (无需域名，免配置，客户端开启 insecure/skip-cert-verify)"
-    echo -e " 2) 使用 Hysteria 2 内置 ACME 自动申请正规 Let's Encrypt 证书 (需真实域名解析到本机 IP)"
+    echo -e "${CYAN}请选择 TLS 证书模式 (TLS Certificate Mode):${NC}"
+    echo -e " 1) 自签名证书模式 (Self-Signed Cert, 免域名)"
+    echo -e " 2) ACME 自动申请模式 (Let's Encrypt, 需真实域名)"
     read -rp "请选择证书模式 [默认: 1]: " CERT_MODE
     CERT_MODE=${CERT_MODE:-1}
 
@@ -301,7 +295,7 @@ install_hysteria2() {
             CERT_MODE=1
             domain_name="bing.com"
         else
-            read -rp "请输入联系邮箱 (用于 Let's Encrypt 证书接收通知): " acme_email
+            read -rp "请输入联系邮箱 (用于 Let's Encrypt 通知): " acme_email
             acme_email=${acme_email:-"admin@${domain_name}"}
         fi
     fi
@@ -309,9 +303,9 @@ install_hysteria2() {
     # 2. 端口模式选择 (单端口 vs 官方原生端口跳跃 Port Hopping)
     local default_p
     default_p=$(gen_random_port)
-    echo -e "\n${CYAN}请选择监听端口模式:${NC}"
-    echo -e " 1) 标准单端口 (例如: ${default_p})"
-    echo -e " 2) Hysteria 2 官方原生端口跳跃 (Port Hopping，彻底防运营商 UDP QoS 阻断)"
+    echo -e "\n${CYAN}请选择监听端口模式 (Port Listening Mode):${NC}"
+    echo -e " 1) 标准单端口模式 (Single Port: ${default_p})"
+    echo -e " 2) 官方原生端口跳跃模式 (Port Hopping: 10000-50000)"
     read -rp "请选择端口模式 [默认: 1]: " PORT_MODE
     PORT_MODE=${PORT_MODE:-1}
 
@@ -322,12 +316,12 @@ install_hysteria2() {
     if [[ "$PORT_MODE" == "2" ]]; then
         local hop_start=$((10000 + RANDOM % 20000))
         local hop_end=$((hop_start + 10000))
-        read -rp "请输入端口跳跃范围 [回车默认随机: ${hop_start}-${hop_end}]: " HOP_RANGE
+        read -rp "请输入端口跳跃范围 [默认随机: ${hop_start}-${hop_end}]: " HOP_RANGE
         HOP_RANGE=${HOP_RANGE:-"${hop_start}-${hop_end}"}
         LISTEN_CONFIG=":${HOP_RANGE}"
         PORT_SHOW="${HOP_RANGE}"
     else
-        read -rp "请输入 Hysteria 2 监听端口 [回车随机使用 ${default_p}]: " PORT_INPUT
+        read -rp "请输入 Hysteria 2 监听端口 [默认随机: ${default_p}]: " PORT_INPUT
         PORT_INPUT=${PORT_INPUT:-$default_p}
         LISTEN_CONFIG=":${PORT_INPUT}"
         PORT_SHOW="${PORT_INPUT}"
@@ -336,18 +330,18 @@ install_hysteria2() {
     # 3. 认证密码与 Traffic Stats Secret
     local default_pass
     default_pass=$(gen_random_pass)
-    read -rp "请输入认证密码 [回车随机生成 ${default_pass}]: " PASSWORD
+    read -rp "请输入认证密码 [默认随机: ${default_pass}]: " PASSWORD
     PASSWORD=${PASSWORD:-$default_pass}
 
     local stats_secret
     stats_secret=$(gen_random_pass)
 
     # 4. 伪装网址
-    read -rp "请输入 HTTP 伪装目标网址 [默认: https://bing.com]: " MASQ_URL
+    read -rp "请输入 HTTP 伪装网址 [默认: https://bing.com]: " MASQ_URL
     MASQ_URL=${MASQ_URL:-"https://bing.com"}
 
     # 5. 网络实测
-    read -rp "是否开启 VPS 网络实测 + QUIC 动态接收窗口匹配？(Y/n) [默认: Y]: " ENABLE_TUNE
+    read -rp "是否开启网络实测 + QUIC 动态接收窗口优化？(Y/n) [默认: Y]: " ENABLE_TUNE
     ENABLE_TUNE=${ENABLE_TUNE:-"Y"}
 
     local up_limit="200 mbps"
@@ -653,27 +647,39 @@ uninstall_hysteria2() {
     fi
 }
 
-# 主菜单
+# 主菜单 (标准化控制台)
 show_menu() {
     clear
+    local service_stat
+    service_stat=$(get_service_status)
     local current_ver
     current_ver=$(get_hysteria_version)
-    echo -e "${CYAN}====================================================${NC}"
-    echo -e "${CYAN}   Hysteria 2 官方深度调优与一键管理脚本 (hy2)      ${NC}"
-    echo -e "${CYAN}   开源 GitHub: https://github.com/Ericsunsk/hysteria2-script ${NC}"
-    echo -e "${CYAN}   当前安装内核版本: ${GREEN}${current_ver}${NC}"
-    echo -e "${CYAN}====================================================${NC}"
-    echo -e " 1. 安装 / 重新配置 Hysteria 2 (支持 ACME/端口跳跃/动态窗口)"
-    echo -e " 2. 一键跑分测速并重新优化 QUIC 窗口与带宽"
-    echo -e " 3. 查看服务器实时流量统计 (Traffic Stats)"
-    echo -e " 4. 检查并更新 Hysteria 2 官方内核到最新版"
-    echo -e " 5. 查看服务运行状态与日志"
-    echo -e " 6. 重启 Hysteria 2 服务"
-    echo -e " 7. 停止 Hysteria 2 服务"
-    echo -e " 8. 打印节点分享链接与客户端配置"
-    echo -e " 9. 彻底卸载 Hysteria 2"
-    echo -e " 0. 退出脚本"
-    echo -e "${CYAN}====================================================${NC}"
+
+    local listen_info="无"
+    if [[ -f /etc/hysteria/config.yaml ]]; then
+        listen_info=$(grep 'listen:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
+    fi
+
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "${CYAN}             Hysteria 2 自动化管理面板 (v2.0)                   ${NC}"
+    echo -e "${CYAN}  官方项目: https://github.com/apernet/hysteria                 ${NC}"
+    echo -e "${CYAN}  开源脚本: https://github.com/Ericsunsk/hysteria2-script       ${NC}"
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "  服务状态 (Status)  : ${service_stat}"
+    echo -e "  内核版本 (Version) : ${GREEN}${current_ver}${NC}"
+    echo -e "  监听配置 (Listen)  : ${PURPLE}${listen_info}${NC}"
+    echo -e "${CYAN}================================================================${NC}"
+    echo -e "  ${GREEN}1.${NC} 安装 / 重新配置服务 (Install / Reconfigure)"
+    echo -e "  ${GREEN}2.${NC} 测速与网络优化     (Speedtest & Network Tuning)"
+    echo -e "  ${GREEN}3.${NC} 流量统计面板       (Traffic Statistics)"
+    echo -e "  ${GREEN}4.${NC} 检查与升级内核     (Update Hysteria Core)"
+    echo -e "  ${GREEN}5.${NC} 查看服务日志       (Service Logs)"
+    echo -e "  ${GREEN}6.${NC} 重启服务          (Restart Service)"
+    echo -e "  ${GREEN}7.${NC} 停止服务          (Stop Service)"
+    echo -e "  ${GREEN}8.${NC} 查看节点与配置     (View Config & Links)"
+    echo -e "  ${GREEN}9.${NC} 卸载服务          (Uninstall Service)"
+    echo -e "  ${GREEN}0.${NC} 退出              (Exit Console)"
+    echo -e "${CYAN}================================================================${NC}"
     read -rp "请输入选项 [0-9]: " choice
 
     case "$choice" in
