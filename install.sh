@@ -2,7 +2,8 @@
 # ==============================================================================
 # Hysteria 2 官方深度调优与一键自动化管理脚本
 # GitHub 官方仓库: https://github.com/apernet/hysteria
-# 参照官方最新文档配置 (内置 ACME 证书 / 原生端口跳跃 / 全动态 QUIC)
+# 本项目地址: https://github.com/Ericsunsk/hysteria2-script
+# 参照官方最新文档配置 (内置 ACME 证书 / 原生端口跳跃 / 全动态 QUIC / 流量统计 API)
 # Supported OS: Debian / Ubuntu / CentOS / AlmaLinux / RockyLinux / Arch
 # ==============================================================================
 
@@ -74,17 +75,33 @@ gen_random_port() {
     echo $((10000 + RANDOM % 40000))
 }
 
+# 人性化字节数格式化
+format_bytes() {
+    local bytes=$1
+    if [ -z "$bytes" ] || [ "$bytes" -eq 0 ] 2>/dev/null; then
+        echo "0 B"
+    elif [ "$bytes" -lt 1024 ]; then
+        echo "${bytes} B"
+    elif [ "$bytes" -lt 1048576 ]; then
+        echo "$((bytes / 1024)) KB"
+    elif [ "$bytes" -lt 1073741824 ]; then
+        echo "$((bytes / 1048576)) MB"
+    else
+        echo "$((bytes / 1073741824)) GB"
+    fi
+}
+
 # 安装基础依赖
 install_dependencies() {
-    log_info "正在检查并安装基础依赖 (curl, openssl, tar, iptables, nftables, python3)..."
+    log_info "正在检查并安装基础依赖 (curl, openssl, tar, iptables, nftables, python3, jq)..."
     if command -v apt-get &>/dev/null; then
-        apt-get update -y && apt-get install -y curl openssl tar ufw iptables nftables python3 speedtest-cli
+        apt-get update -y && apt-get install -y curl openssl tar ufw iptables nftables python3 jq speedtest-cli
     elif command -v yum &>/dev/null; then
-        yum install -y curl openssl tar firewalld iptables nftables python3 speedtest-cli
+        yum install -y curl openssl tar firewalld iptables nftables python3 jq speedtest-cli
     elif command -v dnf &>/dev/null; then
-        dnf install -y curl openssl tar firewalld iptables nftables python3 speedtest-cli
+        dnf install -y curl openssl tar firewalld iptables nftables python3 jq speedtest-cli
     elif command -v pacman &>/dev/null; then
-        pacman -Sy --noconfirm curl openssl tar iptables nftables python3
+        pacman -Sy --noconfirm curl openssl tar iptables nftables python3 jq
     fi
 }
 
@@ -96,7 +113,7 @@ optimize_kernel_network() {
     modprobe tcp_bbr &>/dev/null
     
     cat << EOF > /etc/sysctl.d/99-hysteria.conf
-# Hysteria 2 / QUIC 高性能网络调优 (GitHub: apernet/hysteria)
+# Hysteria 2 / QUIC 高性能网络调优 (GitHub: Ericsunsk/hysteria2-script)
 net.core.rmem_max = 33554432
 net.core.wmem_max = 33554432
 net.core.rmem_default = 2097152
@@ -196,7 +213,7 @@ configure_firewall() {
     fi
 
     # Firewalld
-    if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewalld; then
+    if command -v firewall-cmd &>/dev/null && systemctl is-active --quiet firewall; then
         if [[ "$port_spec" == *-* ]]; then
             firewall-cmd --permanent --add-port="${port_spec//-/:}/udp" &>/dev/null
         else
@@ -222,6 +239,37 @@ update_hysteria_binary() {
     fi
 }
 
+# 查询流量统计数据 (使用官方 Traffic Stats API)
+query_traffic_stats() {
+    if [[ ! -f /etc/hysteria/config.yaml ]]; then
+        log_err "未找到配置文件 /etc/hysteria/config.yaml！"
+        return
+    fi
+
+    local stats_secret
+    stats_secret=$(grep 'secret:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
+    if [[ -z "$stats_secret" ]]; then
+        log_err "未启用 Traffic Stats API！"
+        return
+    fi
+
+    log_info "正在查询 Hysteria 2 服务端流量消耗数据..."
+    local stats_json
+    stats_json=$(curl -s -H "Authorization: ${stats_secret}" http://127.0.0.1:9090/traffic 2>/dev/null)
+
+    if [[ -n "$stats_json" ]]; then
+        echo -e "\n${GREEN}================ 📊 实时流量统计看板 ================${NC}"
+        if command -v jq &>/dev/null; then
+            echo "$stats_json" | jq -r 'to_entries[] | "客户端密码/标识: " + .key + "\n  ⬆️ 上行流量: " + (.value.tx | tostring) + " Bytes\n  ⬇️ 下行流量: " + (.value.rx | tostring) + " Bytes\n"'
+        else
+            echo "$stats_json"
+        fi
+        echo -e "${GREEN}====================================================${NC}\n"
+    else
+        log_warn "暂无活动流量数据，或服务未成功启动。API URL: http://127.0.0.1:9090/traffic"
+    fi
+}
+
 # 主安装逻辑
 install_hysteria2() {
     check_root
@@ -230,7 +278,7 @@ install_hysteria2() {
 
     echo -e "\n${PURPLE}====================================================${NC}"
     echo -e "${PURPLE}     Hysteria 2 官方深度调优与全动态部署           ${NC}"
-    echo -e "${PURPLE}     GitHub 仓库: https://github.com/apernet/hysteria${NC}"
+    echo -e "${PURPLE}     GitHub 仓库: https://github.com/Ericsunsk/hysteria2-script${NC}"
     echo -e "${PURPLE}====================================================${NC}\n"
 
     # 自动优化系统内核网络参数
@@ -285,11 +333,14 @@ install_hysteria2() {
         PORT_SHOW="${PORT_INPUT}"
     fi
 
-    # 3. 认证密码
+    # 3. 认证密码与 Traffic Stats Secret
     local default_pass
     default_pass=$(gen_random_pass)
     read -rp "请输入认证密码 [回车随机生成 ${default_pass}]: " PASSWORD
     PASSWORD=${PASSWORD:-$default_pass}
+
+    local stats_secret
+    stats_secret=$(gen_random_pass)
 
     # 4. 伪装网址
     read -rp "请输入 HTTP 伪装目标网址 [默认: https://bing.com]: " MASQ_URL
@@ -377,6 +428,10 @@ quic:
 sniff:
   enable: true
 
+trafficStats:
+  listen: 127.0.0.1:9090
+  secret: ${stats_secret}
+
 acl:
   inline:
     - reject(10.0.0.0/8)
@@ -432,6 +487,10 @@ quic:
 sniff:
   enable: true
 
+trafficStats:
+  listen: 127.0.0.1:9090
+  secret: ${stats_secret}
+
 acl:
   inline:
     - reject(10.0.0.0/8)
@@ -485,6 +544,7 @@ EOF
     echo -e "${CYAN}SNI 域名           :${NC} ${domain_name}"
     echo -e "${CYAN}证书验证 (insecure):${NC} ${insecure_param} ($([ "$insecure_param" == "0" ] && echo "正规 ACME 证书安全连接" || echo "自签证书跳过验证"))"
     echo -e "${CYAN}动态带宽限制       :${NC} 上行 ${up_limit} | 下行 ${down_limit}"
+    echo -e "${CYAN}流量统计 API       :${NC} http://127.0.0.1:9090/traffic"
     echo -e "${CYAN}内网 ACL 防护      :${NC} 已启用 (自动拒绝内网与私有 IP 扫描)"
     echo -e "${GREEN}----------------------------------------------------${NC}"
     echo -e "${YELLOW}🔗 V2RayN / Nekobox / Sing-box / Shadowrocket 一键分享链接:${NC}"
@@ -535,7 +595,6 @@ tune_existing_config() {
 
     log_info "正在根据实测结果重新计算并更新 /etc/hysteria/config.yaml..."
     
-    # 局部更新配置文件中的 bandwidth 和 quic 动态部分
     if grep -q "bandwidth:" /etc/hysteria/config.yaml; then
         sed -i "/bandwidth:/,/down:/c\bandwidth:\n  up: ${tuned_u} mbps\n  down: ${tuned_d} mbps" /etc/hysteria/config.yaml
     fi
@@ -601,29 +660,31 @@ show_menu() {
     current_ver=$(get_hysteria_version)
     echo -e "${CYAN}====================================================${NC}"
     echo -e "${CYAN}   Hysteria 2 官方深度调优与一键管理脚本 (hy2)      ${NC}"
-    echo -e "${CYAN}   官方 GitHub: https://github.com/apernet/hysteria ${NC}"
+    echo -e "${CYAN}   开源 GitHub: https://github.com/Ericsunsk/hysteria2-script ${NC}"
     echo -e "${CYAN}   当前安装内核版本: ${GREEN}${current_ver}${NC}"
     echo -e "${CYAN}====================================================${NC}"
     echo -e " 1. 安装 / 重新配置 Hysteria 2 (支持 ACME/端口跳跃/动态窗口)"
     echo -e " 2. 一键跑分测速并重新优化 QUIC 窗口与带宽"
-    echo -e " 3. 检查并更新 Hysteria 2 官方内核到最新版"
-    echo -e " 4. 查看服务运行状态与日志"
-    echo -e " 5. 重启 Hysteria 2 服务"
-    echo -e " 6. 停止 Hysteria 2 服务"
-    echo -e " 7. 打印节点分享链接与客户端配置"
-    echo -e " 8. 彻底卸载 Hysteria 2"
+    echo -e " 3. 查看服务器实时流量统计 (Traffic Stats)"
+    echo -e " 4. 检查并更新 Hysteria 2 官方内核到最新版"
+    echo -e " 5. 查看服务运行状态与日志"
+    echo -e " 6. 重启 Hysteria 2 服务"
+    echo -e " 7. 停止 Hysteria 2 服务"
+    echo -e " 8. 打印节点分享链接与客户端配置"
+    echo -e " 9. 彻底卸载 Hysteria 2"
     echo -e " 0. 退出脚本"
     echo -e "${CYAN}====================================================${NC}"
-    read -rp "请输入选项 [0-8]: " choice
+    read -rp "请输入选项 [0-9]: " choice
 
     case "$choice" in
         1) install_hysteria2 ;;
         2) tune_existing_config ;;
-        3) update_hysteria_binary ;;
-        4) view_logs ;;
-        5) restart_service ;;
-        6) stop_service ;;
-        7)
+        3) query_traffic_stats ;;
+        4) update_hysteria_binary ;;
+        5) view_logs ;;
+        6) restart_service ;;
+        7) stop_service ;;
+        8)
             if [[ -f /etc/hysteria/config.yaml ]]; then
                 local pass port_spec sni
                 pass=$(grep 'password:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
@@ -649,7 +710,7 @@ show_menu() {
                 log_err "未找到配置文件 /etc/hysteria/config.yaml，请先安装！"
             fi
             ;;
-        8) uninstall_hysteria2 ;;
+        9) uninstall_hysteria2 ;;
         0) exit 0 ;;
         *) log_err "无效选项！"; exit 1 ;;
     esac
@@ -662,6 +723,8 @@ if [[ "$1" == "install" ]]; then
     install_hysteria2
 elif [[ "$1" == "tune" ]]; then
     tune_existing_config
+elif [[ "$1" == "stats" || "$1" == "traffic" ]]; then
+    query_traffic_stats
 elif [[ "$1" == "update" ]]; then
     update_hysteria_binary
 elif [[ "$1" == "uninstall" ]]; then
