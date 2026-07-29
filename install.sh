@@ -264,9 +264,9 @@ calculate_dynamic_quic_windows() {
     echo "${init_stream}:${max_stream}:${init_conn}:${max_conn}"
 }
 
-# VPS 测速与带宽分析
+# VPS 测速与带宽分析 (日志输出到 stderr，数据通过 stdout 返回)
 run_network_speedtest() {
-    log_info "正在针对 VPS 实际网络带宽进行测速分析 (请稍候)..."
+    log_info "正在针对 VPS 实际网络带宽进行测速分析 (请稍候)..." >&2
     
     local down_mbps=500
     local up_mbps=200
@@ -280,12 +280,12 @@ run_network_speedtest() {
             ul_val=$(echo "$st_out" | grep -i "Upload" | awk '{print $2}' | cut -d. -f1)
             if [[ -n "$dl_val" && "$dl_val" -gt 10 ]]; then down_mbps=$dl_val; fi
             if [[ -n "$ul_val" && "$ul_val" -gt 10 ]]; then up_mbps=$ul_val; fi
-            log_success "测速成功！检测到 VPS 实际下行: ${down_mbps} Mbps | 上行: ${up_mbps} Mbps"
+            log_success "测速成功！检测到 VPS 实际下行: ${down_mbps} Mbps | 上行: ${up_mbps} Mbps" >&2
         else
-            log_warn "Speedtest 测速超时，启用推荐预设网络参数 (上行 200 Mbps / 下行 500 Mbps)"
+            log_warn "Speedtest 测速超时，启用推荐预设网络参数 (上行 200 Mbps / 下行 500 Mbps)" >&2
         fi
     else
-        log_warn "未找到 speedtest 工具，使用默认推荐参数 (上行 200 Mbps / 下行 500 Mbps)"
+        log_warn "未找到 speedtest 工具，使用默认推荐参数 (上行 200 Mbps / 下行 500 Mbps)" >&2
     fi
 
     local tuned_up=$((up_mbps * 85 / 100))
