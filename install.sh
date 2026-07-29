@@ -483,7 +483,7 @@ extract_config_sni() {
     # 优先从 ACME domains 提取，fallback 到证书 CN，最终 fallback 到 bing.com
     local sni=""
     if grep -q "acme:" /etc/hysteria/config.yaml 2>/dev/null; then
-        sni=$(awk '/domains:/{getline; print $2; exit}' /etc/hysteria/config.yaml 2>/dev/null | tr -d '- ')
+        sni=$(awk '/domains:/{getline; print $2; exit}' /etc/hysteria/config.yaml 2>/dev/null | tr -d ' -')
     fi
     if [[ -z "$sni" && -f /etc/hysteria/server.crt ]]; then
         sni=$(openssl x509 -noout -subject -in /etc/hysteria/server.crt 2>/dev/null | sed 's/.*CN *= *//')
