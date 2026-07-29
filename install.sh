@@ -13,7 +13,6 @@ export LANG=C.UTF-8
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
@@ -58,14 +57,21 @@ is_port_occupied() {
     fi
 }
 
-# 智能查找未被占用的可用 UDP 端口 (冲突自动递增避让)
+# 智能查找未被占用的可用 UDP 端口 (冲突自动递增避让，最多尝试 200 次)
 get_free_port() {
     local port=$1
+    local max_tries=200
+    local tries=0
     while is_port_occupied "$port"; do
         log_warn "检测到 UDP 端口 ${port} 已被系统进程占用，正在智能跳过并切换下一个可用端口..."
         port=$((port + 1))
+        tries=$((tries + 1))
         if [ "$port" -gt 65535 ]; then
             port=10000
+        fi
+        if [ "$tries" -ge "$max_tries" ]; then
+            log_err "连续尝试 ${max_tries} 个端口均被占用，请手动指定端口。"
+            exit 1
         fi
     done
     echo "$port"
@@ -156,9 +162,29 @@ gen_random_pass() {
     tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 16
 }
 
-# 随机端口生成器 (10000 - 60000)
+# 随机端口生成器 (10000 - 60000)，使用 /dev/urandom 突破 RANDOM 的 32767 上限
 gen_random_port() {
-    echo $((10000 + RANDOM % 40000))
+    if command -v shuf &>/dev/null; then
+        shuf -i 10000-60000 -n 1
+    else
+        local rand
+        rand=$(od -An -tu2 -N2 /dev/urandom | tr -d ' ')
+        echo $(( 10000 + rand % 50001 ))
+    fi
+}
+
+# 字节数转人类可读格式 (KB/MB/GB)
+format_bytes() {
+    local bytes=$1
+    if [ "$bytes" -ge 1073741824 ]; then
+        echo "$(awk "BEGIN {printf \"%.2f\", ${bytes}/1073741824}") GB"
+    elif [ "$bytes" -ge 1048576 ]; then
+        echo "$(awk "BEGIN {printf \"%.2f\", ${bytes}/1048576}") MB"
+    elif [ "$bytes" -ge 1024 ]; then
+        echo "$(awk "BEGIN {printf \"%.2f\", ${bytes}/1024}") KB"
+    else
+        echo "${bytes} Bytes"
+    fi
 }
 
 # 安装基础依赖
@@ -306,8 +332,9 @@ setup_cron_maintenance() {
     cron_choice=${cron_choice:-1}
 
     if [[ "$cron_choice" == "1" ]]; then
-        cat << EOF > /etc/cron.d/hysteria-maintenance
+        cat << 'EOF' > /etc/cron.d/hysteria-maintenance
 # Hysteria 2 自动化运维任务 (每周日凌晨 3 点执行日志清理与平滑升级)
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 0 3 * * 0 root journalctl --vacuum-time=3d &>/dev/null && /usr/local/bin/hy2 update &>/dev/null
 EOF
         chmod 644 /etc/cron.d/hysteria-maintenance
@@ -343,7 +370,7 @@ update_hysteria_binary() {
     fi
 }
 
-# 查询流量统计数据 (使用官方 Traffic Stats API)
+# 查询流量统计数据 (使用官方 Traffic Stats API，人类可读格式)
 query_traffic_stats() {
     if [[ ! -f /etc/hysteria/config.yaml ]]; then
         log_err "未找到配置文件 /etc/hysteria/config.yaml！"
@@ -361,10 +388,18 @@ query_traffic_stats() {
     local stats_json
     stats_json=$(curl -s -H "Authorization: ${stats_secret}" http://127.0.0.1:9090/traffic 2>/dev/null)
 
-    if [[ -n "$stats_json" ]]; then
+    if [[ -n "$stats_json" && "$stats_json" != "{}" ]]; then
         echo -e "\n${GREEN}================ 📊 流量统计看板 (Traffic Statistics) ================${NC}"
         if command -v jq &>/dev/null; then
-            echo "$stats_json" | jq -r 'to_entries[] | "客户端标识/密码: " + .key + "\n  ⬆️ 发送流量 (Tx): " + (.value.tx | tostring) + " Bytes\n  ⬇️ 接收流量 (Rx): " + (.value.rx | tostring) + " Bytes\n"'
+            echo "$stats_json" | jq -r 'to_entries[] | "\(.key) \(.value.tx) \(.value.rx)"' | while read -r user tx rx; do
+                local tx_h rx_h
+                tx_h=$(format_bytes "$tx")
+                rx_h=$(format_bytes "$rx")
+                echo -e "  客户端标识: ${CYAN}${user}${NC}"
+                echo -e "    ⬆️ 发送流量 (Tx): ${GREEN}${tx_h}${NC}"
+                echo -e "    ⬇️ 接收流量 (Rx): ${GREEN}${rx_h}${NC}"
+                echo ""
+            done
         else
             echo "$stats_json"
         fi
@@ -372,6 +407,35 @@ query_traffic_stats() {
     else
         log_warn "暂无活动流量数据，或服务未成功启动。API Endpoint: http://127.0.0.1:9090/traffic"
     fi
+}
+
+# 从已有 config.yaml 中安全提取字段值
+# 用法: extract_yaml_field "auth" "password"  -> 提取 auth 下的 password
+extract_config_listen_port() {
+    # 从 listen 行中提取纯端口或端口范围，兼容 :port、0.0.0.0:port、:start-end 格式
+    grep 'listen:' /etc/hysteria/config.yaml 2>/dev/null | head -n1 | awk '{print $2}' | sed 's/.*://'
+}
+
+extract_config_auth_password() {
+    # 提取 auth 块下的 password（跳过 salamander 块的 password）
+    awk '/^auth:/{found=1} found && /password:/{print $2; exit}' /etc/hysteria/config.yaml 2>/dev/null
+}
+
+extract_config_obfs_password() {
+    # 提取 salamander 块下的 password
+    awk '/salamander:/{found=1} found && /password:/{print $2; exit}' /etc/hysteria/config.yaml 2>/dev/null
+}
+
+extract_config_sni() {
+    # 优先从 ACME domains 提取，fallback 到证书 CN，最终 fallback 到 bing.com
+    local sni=""
+    if grep -q "acme:" /etc/hysteria/config.yaml 2>/dev/null; then
+        sni=$(awk '/domains:/{getline; print $2; exit}' /etc/hysteria/config.yaml 2>/dev/null | tr -d '- ')
+    fi
+    if [[ -z "$sni" && -f /etc/hysteria/server.crt ]]; then
+        sni=$(openssl x509 -noout -subject -in /etc/hysteria/server.crt 2>/dev/null | sed 's/.*CN *= *//')
+    fi
+    echo "${sni:-bing.com}"
 }
 
 # 主安装逻辑
@@ -525,10 +589,10 @@ install_hysteria2() {
         obfs_yaml="obfs:
   type: salamander
   salamander:
-    password: ${OBFS_PASS}"
+    password: \"${OBFS_PASS}\""
     fi
 
-    # 编写 config.yaml
+    # 编写 config.yaml (所有用户输入值均使用 YAML 双引号包裹防注入)
     log_info "正在生成官方标准 Hysteria 2 配置文件 /etc/hysteria/config.yaml..."
 
     if [[ "$CERT_MODE" == "2" ]]; then
@@ -539,25 +603,23 @@ listen: ${LISTEN_CONFIG}
 acme:
   domains:
     - ${domain_name}
-  email: ${acme_email}
+  email: "${acme_email}"
 
 auth:
   type: password
-  password: ${PASSWORD}
+  password: "${PASSWORD}"
 
 ${obfs_yaml}
 
 masquerade:
   type: proxy
   proxy:
-    url: ${MASQ_URL}
+    url: "${MASQ_URL}"
     rewriteHost: true
 
 bandwidth:
   up: ${up_limit}
   down: ${down_limit}
-
-ignoreClientBandwidth: true
 
 quic:
   initStreamReceiveWindow: ${init_str}
@@ -573,7 +635,7 @@ sniff:
 
 trafficStats:
   listen: 127.0.0.1:9090
-  secret: ${stats_secret}
+  secret: "${stats_secret}"
 
 acl:
   inline:
@@ -606,21 +668,19 @@ tls:
 
 auth:
   type: password
-  password: ${PASSWORD}
+  password: "${PASSWORD}"
 
 ${obfs_yaml}
 
 masquerade:
   type: proxy
   proxy:
-    url: ${MASQ_URL}
+    url: "${MASQ_URL}"
     rewriteHost: true
 
 bandwidth:
   up: ${up_limit}
   down: ${down_limit}
-
-ignoreClientBandwidth: true
 
 quic:
   initStreamReceiveWindow: ${init_str}
@@ -636,7 +696,7 @@ sniff:
 
 trafficStats:
   listen: 127.0.0.1:9090
-  secret: ${stats_secret}
+  secret: "${stats_secret}"
 
 acl:
   inline:
@@ -650,9 +710,10 @@ EOF
     # 防火墙
     configure_firewall "${PORT_SHOW}"
 
-    # 默认开启 Cron 自动运维
-    cat << EOF > /etc/cron.d/hysteria-maintenance
+    # 默认开启 Cron 自动运维 (含 PATH 声明)
+    cat << 'EOF' > /etc/cron.d/hysteria-maintenance
 # Hysteria 2 自动化运维任务 (每周日凌晨 3 点执行日志清理与平滑升级)
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 0 3 * * 0 root journalctl --vacuum-time=3d &>/dev/null && /usr/local/bin/hy2 update &>/dev/null
 EOF
     chmod 644 /etc/cron.d/hysteria-maintenance 2>/dev/null
@@ -790,7 +851,7 @@ tune_existing_config() {
     check_root
     if [[ ! -f /etc/hysteria/config.yaml ]]; then
         log_err "未找到配置文件 /etc/hysteria/config.yaml，请先安装！"
-        exit 1
+        return 1
     fi
 
     optimize_kernel_network
@@ -815,21 +876,32 @@ tune_existing_config() {
     max_cn=$(echo "$quic_wins" | cut -d: -f4)
 
     log_info "正在根据实测结果重新计算并更新 /etc/hysteria/config.yaml..."
-    
-    if grep -q "bandwidth:" /etc/hysteria/config.yaml; then
-        sed -i "/bandwidth:/,/down:/c\bandwidth:\n  up: ${tuned_u} mbps\n  down: ${tuned_d} mbps" /etc/hysteria/config.yaml
-    fi
+
+    # 备份原始配置
+    cp /etc/hysteria/config.yaml /etc/hysteria/config.yaml.bak
+
+    # 更新 bandwidth 部分
+    sed -i "s/^  up: .*/  up: ${tuned_u} mbps/" /etc/hysteria/config.yaml
+    sed -i "s/^  down: .*/  down: ${tuned_d} mbps/" /etc/hysteria/config.yaml
+
+    # 更新 QUIC 窗口参数
+    sed -i "s/^  initStreamReceiveWindow: .*/  initStreamReceiveWindow: ${init_str}/" /etc/hysteria/config.yaml
+    sed -i "s/^  maxStreamReceiveWindow: .*/  maxStreamReceiveWindow: ${max_str}/" /etc/hysteria/config.yaml
+    sed -i "s/^  initConnReceiveWindow: .*/  initConnReceiveWindow: ${init_cn}/" /etc/hysteria/config.yaml
+    sed -i "s/^  maxConnReceiveWindow: .*/  maxConnReceiveWindow: ${max_cn}/" /etc/hysteria/config.yaml
 
     # 语法检测 (如果安装了二进制)
     if command -v hysteria &>/dev/null; then
-        hysteria check -c /etc/hysteria/config.yaml &>/dev/null
-        if [[ $? -ne 0 ]]; then
-            log_err "语法校验错误，取消更新配置。"
+        if ! hysteria check -c /etc/hysteria/config.yaml &>/dev/null; then
+            log_err "语法校验错误，正在回滚配置..."
+            mv /etc/hysteria/config.yaml.bak /etc/hysteria/config.yaml
             return 1
         fi
     fi
 
-    # 平滑热重载 (优先使用 reload 避免中断在链接)
+    rm -f /etc/hysteria/config.yaml.bak
+
+    # 平滑热重载 (优先使用 reload 避免中断在线连接)
     if is_docker_mode; then
         if docker compose version &>/dev/null; then
             docker compose -f /etc/hysteria/docker-compose.yml restart
@@ -925,94 +997,103 @@ uninstall_hysteria2() {
     fi
 }
 
-# 主菜单 (标准化控制台)
-show_menu() {
-    clear
-    local service_stat
-    service_stat=$(get_service_status)
-    local current_ver
-    current_ver=$(get_hysteria_version)
-
-    local listen_info="无"
-    local obfs_info="未启用"
-    if [[ -f /etc/hysteria/config.yaml ]]; then
-        listen_info=$(grep 'listen:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
-        if grep -q "salamander" /etc/hysteria/config.yaml 2>/dev/null; then
-            obfs_info="Salamander 混淆"
-        fi
+# 查看当前节点配置与分享链接
+show_node_info() {
+    if [[ ! -f /etc/hysteria/config.yaml ]]; then
+        log_err "未找到配置文件 /etc/hysteria/config.yaml，请先安装！"
+        return
     fi
 
-    echo -e "${CYAN}================================================================${NC}"
-    echo -e "${CYAN}             Hysteria 2 自动化管理面板 (v2.4)                   ${NC}"
-    echo -e "${CYAN}  官方项目: https://github.com/apernet/hysteria                 ${NC}"
-    echo -e "${CYAN}  开源脚本: https://github.com/Ericsunsk/hysteria2-script       ${NC}"
-    echo -e "${CYAN}================================================================${NC}"
-    echo -e "  服务状态 (Status)  : ${service_stat}"
-    echo -e "  内核版本 (Version) : ${GREEN}${current_ver}${NC}"
-    echo -e "  监听配置 (Listen)  : ${PURPLE}${listen_info}${NC}"
-    echo -e "  报文混淆 (Obfs)    : ${YELLOW}${obfs_info}${NC}"
-    echo -e "${CYAN}================================================================${NC}"
-    echo -e "  ${GREEN}1.${NC} 安装 / 重新配置服务 (Systemd 原生 / Docker Compose)"
-    echo -e "  ${GREEN}2.${NC} 测速与网络优化     (Speedtest & Network Tuning)"
-    echo -e "  ${GREEN}3.${NC} 流量统计面板       (Traffic Statistics)"
-    echo -e "  ${GREEN}4.${NC} 检查与升级内核     (Update Hysteria Core / Docker Image)"
-    echo -e "  ${GREEN}5.${NC} 配置 Cron 定时运维  (Cron Auto Maintenance)"
-    echo -e "  ${GREEN}6.${NC} 查看服务日志       (Service Logs)"
-    echo -e "  ${GREEN}7.${NC} 重启服务          (Restart Service)"
-    echo -e "  ${GREEN}8.${NC} 停止服务          (Stop Service)"
-    echo -e "  ${GREEN}9.${NC} 查看节点与配置     (View Config & Links)"
-    echo -e "  ${GREEN}10.${NC} 卸载服务         (Uninstall Service)"
-    echo -e "  ${GREEN}0.${NC} 退出              (Exit Console)"
-    echo -e "${CYAN}================================================================${NC}"
-    read -rp "请输入选项 [0-10]: " choice
+    local pass port_spec sni obfs_p
+    pass=$(extract_config_auth_password)
+    port_spec=$(extract_config_listen_port)
+    sni=$(extract_config_sni)
+    obfs_p=$(extract_config_obfs_password)
+    local server_ip
+    server_ip=$(get_public_ip)
+    local is_acme=0
+    if grep -q "acme:" /etc/hysteria/config.yaml; then is_acme=1; fi
+    local insecure_val="1"
+    if [ "$is_acme" -eq 1 ]; then insecure_val="0"; fi
 
-    case "$choice" in
-        1) install_hysteria2 ;;
-        2) tune_existing_config ;;
-        3) query_traffic_stats ;;
-        4) update_hysteria_binary ;;
-        5) setup_cron_maintenance ;;
-        6) view_logs ;;
-        7) restart_service ;;
-        8) stop_service ;;
-        9)
-            if [[ -f /etc/hysteria/config.yaml ]]; then
-                local pass port_spec sni obfs_p
-                pass=$(grep 'password:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
-                port_spec=$(grep 'listen:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}' | tr -d ':')
-                sni=$(grep -m1 'domains:' -A1 /etc/hysteria/config.yaml 2>/dev/null | tail -n1 | awk '{print $2}' || grep -m1 'CN=' /etc/hysteria/server.crt 2>/dev/null | sed 's/.*CN=//' || echo "bing.com")
-                obfs_p=$(grep -A2 'salamander:' /etc/hysteria/config.yaml 2>/dev/null | grep 'password:' | awk '{print $2}')
-                local server_ip
-                server_ip=$(get_public_ip)
-                local is_acme=0
-                if grep -q "acme:" /etc/hysteria/config.yaml; then is_acme=1; fi
-                local insecure_val="1"
-                if [ "$is_acme" -eq 1 ]; then insecure_val="0"; fi
+    local obfs_q=""
+    if [[ -n "$obfs_p" ]]; then
+        obfs_q="&obfs=salamander&obfs-password=${obfs_p}"
+    fi
 
-                local obfs_q=""
-                if [[ -n "$obfs_p" ]]; then
-                    obfs_q="&obfs=salamander&obfs-password=${obfs_p}"
-                fi
+    local share_link="hy2://${pass}@${server_ip}:${port_spec}?insecure=${insecure_val}&sni=${sni}${obfs_q}#Hysteria2_${server_ip}"
+    
+    echo -e "\n${GREEN}================ 当前节点配置信息 ================${NC}"
+    echo -e "${CYAN}运行模式       :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd 原生")"
+    echo -e "${CYAN}服务器 IP      :${NC} ${server_ip}"
+    echo -e "${CYAN}监听端口 / 范围:${NC} UDP ${port_spec}"
+    echo -e "${CYAN}认证密码       :${NC} ${pass}"
+    echo -e "${CYAN}Salamander 混淆:${NC} $([ -n "$obfs_p" ] && echo "已开启 (密钥: ${obfs_p})" || echo "未启用")"
+    echo -e "${CYAN}SNI 域名       :${NC} ${sni}"
+    echo -e "${CYAN}节点链接       :${NC} ${share_link}"
+    echo -e "${GREEN}==================================================${NC}\n"
+}
 
-                local share_link="hy2://${pass}@${server_ip}:${port_spec}?insecure=${insecure_val}&sni=${sni}${obfs_q}#Hysteria2_${server_ip}"
-                
-                echo -e "\n${GREEN}================ 当前节点配置信息 ================${NC}"
-                echo -e "${CYAN}运行模式       :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd 原生")"
-                echo -e "${CYAN}服务器 IP      :${NC} ${server_ip}"
-                echo -e "${CYAN}监听端口 / 范围:${NC} UDP ${port_spec}"
-                echo -e "${CYAN}认证密码       :${NC} ${pass}"
-                echo -e "${CYAN}Salamander 混淆:${NC} $([ -n "$obfs_p" ] && echo "已开启 (密钥: ${obfs_p})" || echo "未启用")"
-                echo -e "${CYAN}SNI 域名       :${NC} ${sni}"
-                echo -e "${CYAN}节点链接       :${NC} ${share_link}"
-                echo -e "${GREEN}==================================================${NC}\n"
-            else
-                log_err "未找到配置文件 /etc/hysteria/config.yaml，请先安装！"
+# 主菜单 (标准化控制台，循环交互)
+show_menu() {
+    while true; do
+        clear
+        local service_stat
+        service_stat=$(get_service_status)
+        local current_ver
+        current_ver=$(get_hysteria_version)
+
+        local listen_info="无"
+        local obfs_info="未启用"
+        if [[ -f /etc/hysteria/config.yaml ]]; then
+            listen_info=$(grep 'listen:' /etc/hysteria/config.yaml | head -n1 | awk '{print $2}')
+            if grep -q "salamander" /etc/hysteria/config.yaml 2>/dev/null; then
+                obfs_info="Salamander 混淆"
             fi
-            ;;
-        10) uninstall_hysteria2 ;;
-        0) exit 0 ;;
-        *) log_err "无效选项！"; exit 1 ;;
-    esac
+        fi
+
+        echo -e "${CYAN}================================================================${NC}"
+        echo -e "${CYAN}             Hysteria 2 自动化管理面板 (v2.5)                   ${NC}"
+        echo -e "${CYAN}  官方项目: https://github.com/apernet/hysteria                 ${NC}"
+        echo -e "${CYAN}  开源脚本: https://github.com/Ericsunsk/hysteria2-script       ${NC}"
+        echo -e "${CYAN}================================================================${NC}"
+        echo -e "  服务状态 (Status)  : ${service_stat}"
+        echo -e "  内核版本 (Version) : ${GREEN}${current_ver}${NC}"
+        echo -e "  监听配置 (Listen)  : ${PURPLE}${listen_info}${NC}"
+        echo -e "  报文混淆 (Obfs)    : ${YELLOW}${obfs_info}${NC}"
+        echo -e "${CYAN}================================================================${NC}"
+        echo -e "  ${GREEN}1.${NC} 安装 / 重新配置服务 (Systemd 原生 / Docker Compose)"
+        echo -e "  ${GREEN}2.${NC} 测速与网络优化     (Speedtest & Network Tuning)"
+        echo -e "  ${GREEN}3.${NC} 流量统计面板       (Traffic Statistics)"
+        echo -e "  ${GREEN}4.${NC} 检查与升级内核     (Update Hysteria Core / Docker Image)"
+        echo -e "  ${GREEN}5.${NC} 配置 Cron 定时运维  (Cron Auto Maintenance)"
+        echo -e "  ${GREEN}6.${NC} 查看服务日志       (Service Logs)"
+        echo -e "  ${GREEN}7.${NC} 重启服务          (Restart Service)"
+        echo -e "  ${GREEN}8.${NC} 停止服务          (Stop Service)"
+        echo -e "  ${GREEN}9.${NC} 查看节点与配置     (View Config & Links)"
+        echo -e "  ${GREEN}10.${NC} 卸载服务         (Uninstall Service)"
+        echo -e "  ${GREEN}0.${NC} 退出              (Exit Console)"
+        echo -e "${CYAN}================================================================${NC}"
+        read -rp "请输入选项 [0-10]: " choice
+
+        case "$choice" in
+            1) install_hysteria2 ;;
+            2) tune_existing_config ;;
+            3) query_traffic_stats ;;
+            4) update_hysteria_binary ;;
+            5) setup_cron_maintenance ;;
+            6) view_logs ;;
+            7) restart_service ;;
+            8) stop_service ;;
+            9) show_node_info ;;
+            10) uninstall_hysteria2 ;;
+            0) exit 0 ;;
+            *) log_err "无效选项，请重新输入！" ;;
+        esac
+
+        echo ""
+        read -rp "按 Enter 键返回主菜单..." _
+    done
 }
 
 # 入口
@@ -1032,8 +1113,12 @@ elif [[ "$1" == "uninstall" ]]; then
     uninstall_hysteria2
 elif [[ "$1" == "restart" ]]; then
     restart_service
+elif [[ "$1" == "stop" ]]; then
+    stop_service
 elif [[ "$1" == "status" || "$1" == "log" || "$1" == "logs" ]]; then
     view_logs
+elif [[ "$1" == "info" || "$1" == "node" ]]; then
+    show_node_info
 else
     show_menu
 fi
