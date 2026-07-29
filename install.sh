@@ -173,15 +173,56 @@ gen_random_pass() {
     tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c 16
 }
 
-# 随机端口生成器 (10000 - 60000)，使用 /dev/urandom 突破 RANDOM 的 32767 上限
-gen_random_port() {
-    if command -v shuf &>/dev/null; then
-        shuf -i 10000-60000 -n 1
-    else
-        local rand
-        rand=$(od -An -tu2 -N2 /dev/urandom | tr -d ' ')
-        echo $(( 10000 + rand % 50001 ))
+# 验证并格式化 ACME 域名 (自动剥离前缀/斜杠，校验非纯 IP 与合规格式)
+validate_and_clean_domain() {
+    local input_domain=$1
+    # 剥离 http:// 或 https:// 前缀
+    input_domain=$(echo "$input_domain" | sed -E 's#^https?://##i')
+    # 剥离尾部斜杠或路径
+    input_domain=$(echo "$input_domain" | cut -d/ -f1 | tr -d ' ')
+    
+    if [[ -z "$input_domain" ]]; then
+        echo "ERR_EMPTY"
+        return
     fi
+    # 校验不能是纯 IPv4
+    if echo "$input_domain" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
+        echo "ERR_IP"
+        return
+    fi
+    # 正则格式校验 (最少包含一个点，字符合规)
+    if ! echo "$input_domain" | grep -qE '^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'; then
+        echo "ERR_FORMAT"
+        return
+    fi
+
+    echo "$input_domain"
+}
+
+# 校验单端口合法性 (1-65535 整数)
+validate_single_port() {
+    local p=$1
+    if [[ "$p" =~ ^[0-9]+$ ]] && [ "$p" -ge 1 ] && [ "$p" -le 65535 ]; then
+        echo "OK"
+    else
+        echo "FAIL"
+    fi
+}
+
+# 校验端口跳跃范围合法性 (格式: START-END，要求 1 <= START < END <= 65535 且差值 >= 5)
+validate_hop_range() {
+    local range=$1
+    if [[ "$range" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+        local start="${BASH_REMATCH[1]}"
+        local end="${BASH_REMATCH[2]}"
+        if [ "$start" -ge 1 ] && [ "$end" -le 65535 ] && [ "$end" -gt "$start" ]; then
+            if [ $((end - start)) -ge 5 ]; then
+                echo "OK"
+                return
+            fi
+        fi
+    fi
+    echo "FAIL"
 }
 
 # 安装基础依赖
@@ -450,15 +491,24 @@ install_hysteria2() {
     local acme_email=""
 
     if [[ "$CERT_MODE" == "2" ]]; then
-        read -rp "请输入解析到本机 IP 的真实域名: " domain_name
-        if [[ -z "$domain_name" ]]; then
-            log_err "域名不能为空，回退使用自签名证书模式。"
-            CERT_MODE=1
-            domain_name="bing.com"
-        else
-            read -rp "请输入联系邮箱 (用于 Let's Encrypt 通知): " acme_email
-            acme_email=${acme_email:-"admin@${domain_name}"}
-        fi
+        while true; do
+            read -rp "请输入解析到本机 IP 的真实域名: " domain_name
+            local clean_d
+            clean_d=$(validate_and_clean_domain "$domain_name")
+            if [[ "$clean_d" == "ERR_EMPTY" ]]; then
+                log_err "域名不能为空，请重新输入！"
+            elif [[ "$clean_d" == "ERR_IP" ]]; then
+                log_err "Let's Encrypt 证书申请不支持纯 IP 地址（${domain_name}），请输入关联解析的域名！"
+            elif [[ "$clean_d" == "ERR_FORMAT" ]]; then
+                log_err "域名格式不正确（${domain_name}），正确示例: sub.example.com，请重新输入！"
+            else
+                domain_name="$clean_d"
+                log_success "域名格式校验通过: ${domain_name}"
+                break
+            fi
+        done
+        read -rp "请输入联系邮箱 (用于 Let's Encrypt 通知): " acme_email
+        acme_email=${acme_email:-"admin@${domain_name}"}
     fi
 
     # 2. Salamander 混淆加密配置 (官方混淆抗 DPI)
@@ -503,16 +553,30 @@ install_hysteria2() {
         local hop_start=$((10000 + RANDOM % 20000))
         hop_start=$(get_free_port "$hop_start")
         local hop_end=$((hop_start + 10000))
-        read -rp "请输入端口跳跃范围 [默认随机: ${hop_start}-${hop_end}]: " HOP_RANGE
-        HOP_RANGE=${HOP_RANGE:-"${hop_start}-${hop_end}"}
-        LISTEN_CONFIG="${listen_prefix}${HOP_RANGE}"
-        PORT_SHOW="${HOP_RANGE}"
+        while true; do
+            read -rp "请输入端口跳跃范围 [默认随机: ${hop_start}-${hop_end}]: " HOP_RANGE
+            HOP_RANGE=${HOP_RANGE:-"${hop_start}-${hop_end}"}
+            if [[ "$(validate_hop_range "$HOP_RANGE")" == "OK" ]]; then
+                LISTEN_CONFIG="${listen_prefix}${HOP_RANGE}"
+                PORT_SHOW="${HOP_RANGE}"
+                break
+            else
+                log_err "端口跳跃范围格式不正确 (${HOP_RANGE})！正确格式示例: 10000-20000（必须 1-65535 且跨度 >= 5），请重新输入！"
+            fi
+        done
     else
-        read -rp "请输入 Hysteria 2 监听端口 [默认随机可用端口: ${default_p}]: " PORT_INPUT
-        PORT_INPUT=${PORT_INPUT:-$default_p}
-        PORT_INPUT=$(get_free_port "$PORT_INPUT")
-        LISTEN_CONFIG="${listen_prefix}${PORT_INPUT}"
-        PORT_SHOW="${PORT_INPUT}"
+        while true; do
+            read -rp "请输入 Hysteria 2 监听端口 [默认随机可用端口: ${default_p}]: " PORT_INPUT
+            PORT_INPUT=${PORT_INPUT:-$default_p}
+            if [[ "$(validate_single_port "$PORT_INPUT")" == "OK" ]]; then
+                PORT_INPUT=$(get_free_port "$PORT_INPUT")
+                LISTEN_CONFIG="${listen_prefix}${PORT_INPUT}"
+                PORT_SHOW="${PORT_INPUT}"
+                break
+            else
+                log_err "端口号不正确 (${PORT_INPUT})！端口必须为 1-65535 之间的纯数字，请重新输入！"
+            fi
+        done
     fi
 
     # 4. 认证密码
@@ -941,7 +1005,17 @@ stop_service() {
 # 卸载 Hysteria 2
 uninstall_hysteria2() {
     check_root
-    read -rp "确定要卸载 Hysteria 2 并清除相关配置文件与容器吗？(y/N): " confirm
+    echo -e "\n${RED}====================================================${NC}"
+    echo -e "${RED}  ⚠️ 危险警告：正在准备彻底卸载 Hysteria 2 服务！   ${NC}"
+    echo -e "${RED}====================================================${NC}"
+    echo -e "${YELLOW}此操作将永久清除：${NC}"
+    echo -e "  - /etc/hysteria 目录下所有配置文件与 TLS 证书"
+    echo -e "  - 系统内核优化参数 99-hysteria.conf"
+    echo -e "  - Cron 定时运维与自动日志清理任务"
+    echo -e "  - Systemd 服务与 Docker Compose 容器"
+    echo -e "${RED}====================================================${NC}"
+    read -rp "确定要彻底卸载 Hysteria 2 吗？(y/N) [默认: N]: " confirm
+    confirm=${confirm:-"N"}
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
         log_info "正在停止并清理服务..."
         if is_docker_mode; then
