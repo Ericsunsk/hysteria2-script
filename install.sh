@@ -33,14 +33,25 @@ check_root() {
 
 # 注册 hy2 全局命令快捷键
 shortcut_register() {
-    if [[ -f "/Users/sunshikang/Desktop/一件脚本/install.sh" ]]; then
+    # 本地开发环境跳过注册
+    if [[ "$(uname)" == "Darwin" ]]; then
+        return
+    fi
+    if [[ -f "/usr/local/bin/hy2" ]]; then
         return
     fi
     local script_path
     script_path=$(readlink -f "$0" 2>/dev/null || echo "$0")
-    if [[ -f "$script_path" && ! -f "/usr/local/bin/hy2" ]]; then
+    # 当通过 bash <(curl ...) 管道执行时，$0 为 /dev/fd/xx，符号链接无法持久化
+    # 此时直接从 GitHub 下载一份完整脚本到 /usr/local/bin/hy2
+    if [[ "$script_path" == /dev/fd/* || "$script_path" == /proc/* || ! -f "$script_path" ]]; then
+        curl -fsSL https://raw.githubusercontent.com/Ericsunsk/hysteria2-script/main/install.sh -o /usr/local/bin/hy2 2>/dev/null
+        chmod +x /usr/local/bin/hy2 2>/dev/null
+    else
         ln -sf "$script_path" /usr/local/bin/hy2 2>/dev/null
         chmod +x /usr/local/bin/hy2 2>/dev/null
+    fi
+    if [[ -f "/usr/local/bin/hy2" ]]; then
         log_success "已快捷注册系统命令 'hy2'！今后在终端任何位置输入 hy2 即可唤出管理菜单。"
     fi
 }
