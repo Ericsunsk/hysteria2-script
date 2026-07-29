@@ -725,7 +725,7 @@ EOF
         if id "hysteria" &>/dev/null; then
             chown -R hysteria:hysteria /etc/hysteria/
         fi
-        chmod 600 /etc/hysteria/server.key
+        chmod 644 /etc/hysteria/server.key
         chmod 644 /etc/hysteria/server.crt
 
         cat << EOF > /etc/hysteria/config.yaml
@@ -847,6 +847,12 @@ EOF
         fi
 
         log_info "配置开机自启并启动服务..."
+        if id "hysteria" &>/dev/null; then
+            chown -R hysteria:hysteria /etc/hysteria &>/dev/null
+        fi
+        chmod 755 /etc/hysteria &>/dev/null
+        chmod 644 /etc/hysteria/server.key &>/dev/null || true
+        chmod 644 /etc/hysteria/server.crt &>/dev/null || true
         systemctl daemon-reload
         systemctl enable hysteria-server.service
         systemctl restart hysteria-server.service
