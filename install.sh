@@ -74,14 +74,14 @@ get_free_port() {
     local max_tries=200
     local tries=0
     while is_port_occupied "$port"; do
-        log_warn "检测到 UDP 端口 ${port} 已被系统进程占用，正在智能跳过并切换下一个可用端口..."
+        log_warn "检测到 UDP 端口 ${port} 已被系统进程占用，正在智能跳过并切换下一个可用端口..." >&2
         port=$((port + 1))
         tries=$((tries + 1))
         if [ "$port" -gt 65535 ]; then
             port=10000
         fi
         if [ "$tries" -ge "$max_tries" ]; then
-            log_err "连续尝试 ${max_tries} 个端口均被占用，请手动指定端口。"
+            log_err "连续尝试 ${max_tries} 个端口均被占用，请手动指定端口。" >&2
             exit 1
         fi
     done
