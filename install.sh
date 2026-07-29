@@ -123,9 +123,9 @@ get_service_status() {
         if ! command -v hysteria &>/dev/null; then
             echo -e "${YELLOW}未安装 (Not Installed)${NC}"
         elif systemctl is-active --quiet hysteria-server.service 2>/dev/null; then
-            echo -e "${GREEN}运行中 (Systemd 原生)${NC}"
+            echo -e "${GREEN}运行中 (Systemd)${NC}"
         else
-            echo -e "${RED}已停止 (Systemd 原生)${NC}"
+            echo -e "${RED}已停止 (Systemd)${NC}"
         fi
     fi
 }
@@ -451,9 +451,9 @@ install_hysteria2() {
     # 自动优化系统内核网络参数
     optimize_kernel_network
 
-    # 0. 部署模式选择 (Systemd 原生 vs Docker Compose 容器)
+    # 0. 部署模式选择 (Systemd vs Docker Compose 容器)
     echo -e "${CYAN}请选择安装与运行模式 (Deployment Mode):${NC}"
-    echo -e " 1) Systemd 本地原生部署 (性能极佳，适合大部分 VPS)"
+    echo -e " 1) Systemd 本地部署 (性能极佳，适合大部分 VPS)"
     echo -e " 2) Docker Compose 容器化部署 (环境彻底隔离，全自动守护更新)"
     read -rp "请选择部署模式 [默认: 1]: " DEPLOY_MODE
     DEPLOY_MODE=${DEPLOY_MODE:-1}
@@ -718,7 +718,7 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EOF
     chmod 644 /etc/cron.d/hysteria-maintenance 2>/dev/null
 
-    # 根据 DEPLOY_MODE 进行 Systemd 原生部署或 Docker Compose 容器部署
+    # 根据 DEPLOY_MODE 进行 Systemd 部署或 Docker Compose 容器部署
     if [[ "$DEPLOY_MODE" == "2" ]]; then
         # Docker 部署分支
         install_docker_if_needed
@@ -738,7 +738,7 @@ services:
     command: ["server", "-c", "/etc/hysteria/config.yaml"]
 EOF
 
-        # 清除旧的原生 systemd 服务以防冲突
+        # 清除旧的 systemd 服务以防冲突
         systemctl stop hysteria-server.service &>/dev/null
         systemctl disable hysteria-server.service &>/dev/null
 
@@ -757,7 +757,7 @@ EOF
             exit 1
         fi
     else
-        # Systemd 原生部署分支
+        # Systemd 部署分支
         rm -f /etc/hysteria/docker-compose.yml &>/dev/null
         log_info "开始从 GitHub 官方拉取安装 Hysteria 2 内核..."
         bash <(curl -fsSL https://get.hy2.sh/)
@@ -789,7 +789,7 @@ EOF
 
         sleep 2
         if systemctl is-active --quiet hysteria-server.service; then
-            log_success "Systemd 原生 Hysteria 2 服务已成功运行！"
+            log_success "Systemd Hysteria 2 服务已成功运行！"
         else
             log_err "Hysteria 2 服务启动失败，请检查日志！"
             exit 1
@@ -815,7 +815,7 @@ EOF
     echo -e "\n${GREEN}====================================================${NC}"
     echo -e "${GREEN}      🎉 Hysteria 2 官方深度调优部署完成！           ${NC}"
     echo -e "${GREEN}====================================================${NC}"
-    echo -e "${CYAN}运行模式           :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd 原生")"
+    echo -e "${CYAN}运行模式           :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd")"
     echo -e "${CYAN}服务器地址 / IP    :${NC} ${main_host}"
     echo -e "${CYAN}监听端口 / 范围    :${NC} UDP ${PORT_SHOW} ($([ "$ip_stack" == "dual" ] && echo "IPv4/IPv6 双栈" || echo "IPv4 单栈"))"
     echo -e "${CYAN}认证密码           :${NC} ${PASSWORD}"
@@ -1024,7 +1024,7 @@ show_node_info() {
     local share_link="hy2://${pass}@${server_ip}:${port_spec}?insecure=${insecure_val}&sni=${sni}${obfs_q}#Hysteria2_${server_ip}"
     
     echo -e "\n${GREEN}================ 当前节点配置信息 ================${NC}"
-    echo -e "${CYAN}运行模式       :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd 原生")"
+    echo -e "${CYAN}运行模式       :${NC} $(is_docker_mode && echo "Docker Compose 容器" || echo "Systemd")"
     echo -e "${CYAN}服务器 IP      :${NC} ${server_ip}"
     echo -e "${CYAN}监听端口 / 范围:${NC} UDP ${port_spec}"
     echo -e "${CYAN}认证密码       :${NC} ${pass}"
@@ -1062,7 +1062,7 @@ show_menu() {
         echo -e "  监听配置 (Listen)  : ${PURPLE}${listen_info}${NC}"
         echo -e "  报文混淆 (Obfs)    : ${YELLOW}${obfs_info}${NC}"
         echo -e "${CYAN}================================================================${NC}"
-        echo -e "  ${GREEN}1.${NC} 安装 / 重新配置服务 (Systemd 原生 / Docker Compose)"
+        echo -e "  ${GREEN}1.${NC} 安装 / 重新配置服务 (Systemd / Docker Compose)"
         echo -e "  ${GREEN}2.${NC} 测速与网络优化     (Speedtest & Network Tuning)"
         echo -e "  ${GREEN}3.${NC} 流量统计面板       (Traffic Statistics)"
         echo -e "  ${GREEN}4.${NC} 检查与升级内核     (Update Hysteria Core / Docker Image)"
