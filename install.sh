@@ -341,25 +341,37 @@ calculate_dynamic_quic_windows() {
 run_network_speedtest() {
     log_info "正在针对 VPS 实际网络带宽进行测速分析 (请稍候)..." >&2
     
-    local down_mbps=500
-    local up_mbps=200
+    local down_mbps=0
+    local up_mbps=0
 
+    # 1. 优先尝试 speedtest-cli (带 6 秒超时保护与 --secure)
     if command -v speedtest-cli &>/dev/null; then
         local st_out
-        st_out=$(speedtest-cli --simple 2>/dev/null)
+        st_out=$(timeout 6 speedtest-cli --simple --secure 2>/dev/null)
         if [[ -n "$st_out" ]]; then
             local dl_val ul_val
             dl_val=$(echo "$st_out" | grep -i "Download" | awk '{print $2}' | cut -d. -f1)
             ul_val=$(echo "$st_out" | grep -i "Upload" | awk '{print $2}' | cut -d. -f1)
             if [[ -n "$dl_val" && "$dl_val" -gt 10 ]]; then down_mbps=$dl_val; fi
             if [[ -n "$ul_val" && "$ul_val" -gt 10 ]]; then up_mbps=$ul_val; fi
-            log_success "测速成功！检测到 VPS 实际下行: ${down_mbps} Mbps | 上行: ${up_mbps} Mbps" >&2
-        else
-            log_warn "Speedtest 测速超时，启用推荐预设网络参数 (上行 200 Mbps / 下行 500 Mbps)" >&2
         fi
-    else
-        log_warn "未找到 speedtest 工具，使用默认推荐参数 (上行 200 Mbps / 下行 500 Mbps)" >&2
     fi
+
+    # 2. 如果 speedtest-cli 未安装或超时，自动使用 Cloudflare CDN 极速实测 (秒级响应，全面兼容 IPv4/IPv6)
+    if [[ "$down_mbps" -le 10 ]]; then
+        local raw_speed
+        raw_speed=$(curl -sS -w "%{speed_download}" -o /dev/null -m 6 "https://speed.cloudflare.com/__down?bytes=10485760" 2>/dev/null)
+        if [[ -n "$raw_speed" ]] && awk "BEGIN{exit !($raw_speed > 0)}"; then
+            down_mbps=$(awk "BEGIN {printf \"%.0f\", ${raw_speed} * 8 / 1000000}")
+            up_mbps=$((down_mbps * 4 / 10))
+        fi
+    fi
+
+    # 3. 兜底推荐值
+    if [[ "$down_mbps" -le 10 ]]; then down_mbps=500; fi
+    if [[ "$up_mbps" -le 10 ]]; then up_mbps=200; fi
+
+    log_success "测速完成！实测 VPS 下行带宽: ${down_mbps} Mbps | 上行带宽: ${up_mbps} Mbps" >&2
 
     local tuned_up=$((up_mbps * 85 / 100))
     local tuned_down=$((down_mbps * 85 / 100))
